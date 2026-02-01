@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import Ingredient from "@/models/Ingredient";
 export async function PUT(request,{params})
 {
-    const {id}= params;
+    const {id}= await params;
     // const {newIngredientName:ingredientName,newQuantity:quantity,newUnit:unit,newCost:cost} = await request.json();
     const {newIngredientName:ingredientName,newQuantity:quantity,newUnit:unit,newCost:cost} = await request.json();
     await connectMongoDB();
@@ -12,8 +12,8 @@ export async function PUT(request,{params})
 }
 export async function GET(request,{params})
 {
-    const {id}=params;
-    await connectMongoDB
+    const {id} = await params;
+    await connectMongoDB();
     const ingredient=await Ingredient.findOne({_id:id});
     return NextResponse.json({ingredient},{status:200}); 
 }

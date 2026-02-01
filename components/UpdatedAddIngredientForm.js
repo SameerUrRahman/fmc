@@ -15,7 +15,8 @@ export default function UpdatedAddIngredientForm() {
   useEffect(() => {
     const getIngredients = async () => {
       try{
-        const response= await fetch("http://localhost:3000/api/knownIngredients");
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+        const response= await fetch(`${apiUrl}/api/knownIngredients`);
         if(!response.ok)
         {
           throw new Error("Failed to fetch ingredients");
@@ -63,7 +64,8 @@ export default function UpdatedAddIngredientForm() {
       // }
       try{
         // const unit=""
-        const res= await fetch("http://localhost:3000/api/ingredients",{
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+        const res= await fetch(`${apiUrl}/api/ingredients`,{
           method:"POST",
           headers:{
             "content-type":"application/json"

@@ -42,7 +42,8 @@ export default function AddIngredientForm() {
     }
     try{
       // const unit=""
-      const res= await fetch("http://localhost:3000/api/ingredients",{
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const res= await fetch(`${apiUrl}/api/ingredients`,{
         method:"POST",
         headers:{
           "content-type":"application/json"

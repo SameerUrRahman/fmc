@@ -5,7 +5,9 @@ import IngredientTable from "./IngredientTable";
 const getIngredients=async() =>
 {
   try{
-    const res= await fetch("http://localhost:3000/api/ingredients",{
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+    console.log(`Fetching ingredients from: ${apiUrl}/api/ingredients`);
+    const res= await fetch(`${apiUrl}/api/ingredients`,{
       cache:"no-store"
     });
     if(!res.ok) 
@@ -17,6 +19,7 @@ const getIngredients=async() =>
   catch(e)
   {
     console.log("error loading ingredients:",e);
+    return { ingredients: [] };
   }
   
 }

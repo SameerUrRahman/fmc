@@ -29,7 +29,8 @@ export default function EditIngredientForm({
     }
 
     try{
-      const res=await fetch(`http://localhost:3000/api/ingredients/${id}`,{
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const res=await fetch(`${apiUrl}/api/ingredients/${id}`,{
         method:"PUT",
         headers:{
           "Content-type":"application/json",

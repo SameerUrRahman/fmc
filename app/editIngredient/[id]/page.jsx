@@ -1,7 +1,8 @@
 import EditIngredientForm from "@/components/EditIngredientForm";
 const getIngredientById= async (id) =>{
     try{
-        const res= await fetch(`http:localhost:3000/api/ingredients/${id}`,{
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+        const res= await fetch(`${apiUrl}/api/ingredients/${id}`,{
             cache:"no-store"
         })
         if(res.ok) return res.json();
@@ -12,9 +13,14 @@ const getIngredientById= async (id) =>{
 }
 export default async function EditIngredient({params})
 {
-    const {id}=params;
-    const {ingredient}= await getIngredientById(id);
-    const {ingredientName,quantity,unit,cost}=ingredient;
+    const {id}= await params;
+    const ingredientData = await getIngredientById(id);
+    
+    if (!ingredientData || !ingredientData.ingredient) {
+        return <div className="p-5">Ingredient not found</div>;
+    }
+
+    const {ingredientName,quantity,unit,cost}=ingredientData.ingredient;
     // console.log(ingredient);
     return (
         <>
