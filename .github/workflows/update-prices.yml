@@ -1,0 +1,24 @@
+# Daily price sync: pulls Telangana mandi prices from data.gov.in into the
+# price book. Needs two repo secrets:
+#   MONGODB_URI       - the Atlas connection string
+#   DATA_GOV_API_KEY  - free key from https://data.gov.in
+name: Update ingredient prices
+
+on:
+  schedule:
+    - cron: "30 3 * * *" # 09:00 IST daily
+  workflow_dispatch:
+
+jobs:
+  update-prices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: node scripts/fetch_gov_prices.mjs
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
