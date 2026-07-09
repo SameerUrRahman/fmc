@@ -12,7 +12,7 @@
     "prices:bigbasket": "node scripts/scrape_bigbasket.mjs"
   },
   "dependencies": {
-    "@heroui/react": "^2.8.10",
+    "@heroui/react": "2.7",
     "critters": "^0.0.20",
     "framer-motion": "^12.26.2",
     "mongodb": "^7.0.0",

@@ -3,25 +3,44 @@ import { Navbar, NavbarBrand, NavbarContent, NavbarItem } from "@heroui/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+function NavLink({ href, children, active }) {
+  return (
+    <Link
+      href={href}
+      className={`text-sm px-3 py-1.5 rounded-lg transition-colors ${
+        active
+          ? "bg-primary/15 text-primary font-medium"
+          : "text-default-500 hover:text-foreground hover:bg-content2"
+      }`}
+    >
+      {children}
+    </Link>
+  );
+}
+
 export default function Navbarr() {
   const pathname = usePathname();
   return (
-    <Navbar isBordered maxWidth="full" classNames={{ wrapper: "px-2" }}>
-      <NavbarBrand>
-        <Link className="text-primary font-bold text-lg" href="/">
+    <Navbar isBordered maxWidth="xl" classNames={{ base: "bg-background/80" }}>
+      <NavbarBrand className="gap-2">
+        <span className="text-xl">🧾</span>
+        <Link className="font-bold text-lg text-foreground" href="/">
           FMC
+          <span className="hidden sm:inline text-default-400 font-normal text-sm ml-2">
+            recipe costs
+          </span>
         </Link>
       </NavbarBrand>
-      <NavbarContent justify="end">
-        <NavbarItem isActive={pathname === "/"}>
-          <Link href="/" className={pathname === "/" ? "text-primary" : ""}>
+      <NavbarContent justify="end" className="gap-1">
+        <NavbarItem>
+          <NavLink href="/" active={pathname === "/" || pathname.startsWith("/recipe")}>
             Recipes
-          </Link>
+          </NavLink>
         </NavbarItem>
-        <NavbarItem isActive={pathname === "/prices"}>
-          <Link href="/prices" className={pathname === "/prices" ? "text-primary" : ""}>
+        <NavbarItem>
+          <NavLink href="/prices" active={pathname === "/prices"}>
             Price Book
-          </Link>
+          </NavLink>
         </NavbarItem>
       </NavbarContent>
     </Navbar>

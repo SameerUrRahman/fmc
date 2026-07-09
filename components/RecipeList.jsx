@@ -48,12 +48,16 @@ export default function RecipeList({ recipes }) {
       </div>
 
       {recipes.length === 0 && (
-        <Card>
-          <CardBody className="items-center gap-2 py-10 text-center">
-            <p className="text-lg">No recipes yet.</p>
-            <p className="text-default-500">
+        <Card className="border border-dashed border-default-200 bg-transparent">
+          <CardBody className="items-center gap-3 py-14 text-center">
+            <span className="text-4xl">🍳</span>
+            <p className="text-lg font-medium">No recipes yet</p>
+            <p className="text-default-500 max-w-sm">
               Create your first recipe, add its ingredients, and see exactly what it costs to make.
             </p>
+            <Button color="primary" onPress={createRecipe} isLoading={creating}>
+              Create a recipe
+            </Button>
           </CardBody>
         </Card>
       )}
@@ -63,8 +67,11 @@ export default function RecipeList({ recipes }) {
           const { total, perServing, lines } = recipeCost(recipe.ingredients, recipe);
           const broken = lines.filter((l) => l.error).length;
           return (
-            <Card key={recipe._id} className="relative hover:bg-content2 transition-colors">
-              <CardBody className="gap-1">
+            <Card
+              key={recipe._id}
+              className="relative border border-default-100 hover:border-primary/60 hover:bg-content2 transition-colors"
+            >
+              <CardBody className="gap-1 p-5">
                 <div className="flex items-start justify-between">
                   {/* after:inset-0 overlay makes the whole card the click target
                       without nesting the delete <button> inside another button */}
@@ -91,7 +98,7 @@ export default function RecipeList({ recipes }) {
                   {recipe.servings} serving{recipe.servings === 1 ? "" : "s"}
                 </p>
               </CardBody>
-              <CardFooter className="justify-between">
+              <CardFooter className="justify-between px-5 pb-4 pt-0">
                 <div className="flex gap-2">
                   <Chip color="primary" variant="flat">{formatINR(total)} total</Chip>
                   <Chip variant="flat">{formatINR(perServing)} / serving</Chip>
