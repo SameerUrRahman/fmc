@@ -9,6 +9,8 @@ const knownIngredientSchema = new Schema(
     // price per priceUnit, e.g. 42 per kg
     price: { type: Number, required: true, min: 0 },
     priceUnit: { type: String, required: true, default: "kg" },
+    // alternate names (hindi/regional/spelling) used by the import matcher
+    aliases: { type: [String], default: [] },
     // where this price came from: manual | data.gov.in | bigbasket | ...
     source: { type: String, default: "manual" },
     fetchedAt: { type: Date, default: Date.now },

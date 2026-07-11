@@ -14,12 +14,14 @@ import {
   Slider,
   Tooltip,
   addToast,
+  useDisclosure,
 } from "@heroui/react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { QUANTITY_UNITS, PRICE_UNITS, lineCost, recipeCost, formatINR } from "@/libs/units";
 import { DeleteIcon } from "./DeleteIcon";
+import ImportIngredientsModal from "./ImportIngredientsModal";
 
 const emptyLine = () => ({
   key: crypto.randomUUID(),
@@ -62,6 +64,16 @@ export default function RecipeWorkspace({ initialRecipe, knownIngredients }) {
   );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const importModal = useDisclosure();
+
+  const importLines = (newLines) => {
+    setDirty(true);
+    setLines((prev) => [
+      ...prev.filter((l) => l.ingredientName.trim() !== ""),
+      ...newLines.map((l) => ({ ...l, key: crypto.randomUUID() })),
+    ]);
+    router.refresh(); // pick up any price-book entries the import created
+  };
 
   const patchLine = (key, patch) => {
     setDirty(true);
@@ -278,9 +290,19 @@ export default function RecipeWorkspace({ initialRecipe, knownIngredients }) {
                 </div>
               );
             })}
-            <Button variant="flat" color="primary" onPress={addLine} className="self-start">
-              + Add ingredient
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="flat" color="primary" onPress={addLine}>
+                + Add ingredient
+              </Button>
+              <Button variant="flat" onPress={importModal.onOpen}>
+                ⇣ Import from text
+              </Button>
+            </div>
+            <ImportIngredientsModal
+              isOpen={importModal.isOpen}
+              onOpenChange={importModal.onOpenChange}
+              onImport={importLines}
+            />
           </CardBody>
         </Card>
 
