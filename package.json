@@ -15,7 +15,7 @@
     "@heroui/react": "2.7",
     "critters": "^0.0.20",
     "framer-motion": "^12.26.2",
-    "mongodb": "^7.0.0",
+    "mongodb": "^7.5.0",
     "mongoose": "^9.1.4",
     "next": "^16.1.3",
     "react": "^19.2.3",
