@@ -111,10 +111,20 @@ Plumbing, not polish: item 6 can't be built safely without it.
   `x-ratelimit-reset-*` and return something the UI can render as "rate limited,
   try again in Ns".
 
-Free-tier budget, for reference: **30 RPM / 1,000 RPD / 12k TPM / 100k TPD.** One
-import ≈ 550 tokens in a single request (all unparsed lines are batched into one
-call), so ≈180 imports/day before the token-per-day ceiling. Not a constraint for
-imports; it *is* a constraint for anything per-keystroke.
+Free-tier budget, for reference: **30 RPM / 1,000 RPD / 12k TPM / 100k TPD.** All
+unparsed lines are batched into one request, so an import is one call regardless
+of length — but the token cost scales with how much the regex parser *missed*,
+and the earlier "≈550 tokens, ≈180 imports/day" figure was measured on a short,
+clean list. A 27-line recipe pasted as markdown (checkbox glyphs, affiliate links
+on half the lines) went to ~575 in / ~880 out ≈ **1,450 tokens**, or ≈65
+imports/day — roughly 3x worse, and **output dominates**, which is easy to miss
+when eyeballing prompt size. URLs are the main driver: they tokenize at ~2.2
+chars/token against ~4 for prose.
+
+The lever is the parser, not the model. After the bullet/markdown-link fixes the
+same paste needs **zero** LLM lines. Budget for the LLM as a rescue path for
+genuinely odd input, and treat a high LLM-line count on ordinary recipes as a
+parser bug rather than an expected cost.
 
 ### 6. Unknown-ingredient handling — `S` *(needs item 5)*
 On a price-book miss: try a live data.gov.in lookup (JSON API, fast, no bot
@@ -198,7 +208,12 @@ input channel rather than deepening the data pipeline, same reasoning as item 9.
 - `.agent/` was committed in `5897894` — ~7,700 lines of agent skill docs now sit
   in a public portfolio repo an interviewer might browse. Consider `.gitignore`.
 - "to taste" ingredients parse to quantity 0 and silently cost ₹0. Fine for salt,
-  misleading for sugar.
+  misleading for sugar. (Quantified-but-vague lines like "2 tbsp ghee optional"
+  now keep their quantity; only genuinely unquantified ones fall to 0.)
+- Section headings are dropped by an explicit keyword list, so an unlisted one
+  ("Crispy Fried Onions") still imports as an ingredient. A heading and a bare
+  ingredient are the same shape — "Garnish" vs "Star anise" — so anything looser
+  starts eating real ingredients. Reviewing the draft catches it.
 - No density entry for onion, so volume-quantified onion priced per kg can't cost.
   Reproduced live: importing "Onion - 1 katori chopped" yields 150 mL against a
   ₹31/kg price and fails with *"no density known for onion"*. Item 3's piece-weight

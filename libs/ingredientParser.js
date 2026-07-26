@@ -65,6 +65,15 @@ const PSEUDO_UNITS = {
 
 const TO_TASTE_RE = /\b(to\s+taste|as\s+(needed|required)|for\s+(frying|garnish(ing)?|tempering|tadka)|optional)\b/i;
 
+// Section headings in pasted recipes ("Garnish", "Rice Ingredients", "For the
+// marinade"). Headings that end in ":" are already dropped; these don't.
+//
+// Matched on the whole line and kept to an explicit keyword list on purpose: a
+// heading and a bare ingredient are the same shape ("Garnish" vs "Star anise"),
+// so anything looser starts eating real ingredients.
+const SECTION_HEAD_RE =
+  /^(?:for\s+the\s+.*|(?:the\s+)?(?:ingredients?|marinade|marination|garnish(?:ing)?|topping|seasoning|tempering|tadka|masala\s+paste|dough|batter|filling|stuffing|sauce|dressing|assembly|method|instructions?|directions?|notes?|equipment)\b.*|.*\b(?:ingredients?|marinade|garnish(?:ing)?|topping|seasoning|assembly)\s*)$/i;
+
 // quantity: "2", "2.5", "1/2", "1 1/2", optionally a range "2-3" / "2 to 3"
 const QTY_PART = String.raw`(?:\d+\s+\d+\s*\/\s*\d+|\d+\s*\/\s*\d+|\d*\.\d+|\d+)`;
 const QTY_RE = new RegExp(
@@ -139,10 +148,12 @@ function parseQtyUnit(s) {
   // optional unit word right after the quantity
   const unitMatch = rest.match(/^([a-zA-Z.]+)\s*/);
   let unit = null;
+  let unitWord = null;
   if (unitMatch) {
     const norm = normalizeUnit(unitMatch[1]);
     if (norm) {
       unit = norm.unit;
+      unitWord = unitMatch[1];
       quantity *= norm.factor;
       estimated = estimated || norm.estimated;
       rest = rest.slice(unitMatch[0].length).trim();
@@ -154,7 +165,7 @@ function parseQtyUnit(s) {
     unit = "piece"; // "2 onions" -> 2 piece
     estimated = true;
   }
-  return { quantity, unit, rest, estimated };
+  return { quantity, unit, rest, estimated, unitWord };
 }
 
 /** Parse one line. Returns a draft item or null if the line should be skipped. */
@@ -162,15 +173,27 @@ export function parseIngredientLine(rawLine) {
   const raw = rawLine.trim();
   if (!raw) return null;
 
-  // bullets / numbered-list prefixes ("- ", "* ", "• ", "3) " but not "3 onions")
+  // Bullets / numbered-list prefixes ("- ", "* ", "• ", "3) " but not "3 onions").
+  // Whitespace is inside the character class, not after it: markdown-converted
+  // recipe pages emit "* ▢1 pound chicken", where a space sits *between* two
+  // bullet markers. Anchoring on a single run of bullets-then-space left the ▢
+  // attached to the quantity and killed every line in the list.
   let line = raw
-    .replace(/^[-*•·▢◻☐✓]+\s*/, "")
+    .replace(/^[-*•·▢◻☐✓\s]+/, "")
     .replace(/^\d+[.)]\s+(?=\D)/, "")
     .trim();
   if (!line) return null;
 
   // section headers: "For the marinade:" / short line ending in ":"
   if (/:$/.test(line)) return null;
+  // Only ever a heading if there's no quantity on the line — otherwise
+  // "1 tbsp italian seasoning" and "2 cups cake topping" get silently dropped.
+  if (!/\d/.test(line) && SECTION_HEAD_RE.test(line)) return null;
+
+  // Markdown links -> their text. Recipe sites link half their ingredients to
+  // affiliate pages; converted to markdown that becomes "[ghee](https://…)",
+  // and the URL would otherwise be read as a parenthetical note.
+  line = line.replace(/\[([^\]]+)\]\((?:[^)]*)\)/g, "$1");
 
   line = expandUnicodeFractions(line);
 
@@ -188,7 +211,30 @@ export function parseIngredientLine(rawLine) {
 
   // "salt to taste" / "oil for frying" — negligible cost, qty 0, flagged
   if (TO_TASTE_RE.test(line)) {
-    const name = cleanName(line.replace(TO_TASTE_RE, " ").replace(/\s+/g, " "));
+    const stripped = line.replace(TO_TASTE_RE, " ").replace(/\s+/g, " ").trim();
+
+    // "2 tablespoons ghee optional" is quantified — only the *word* is vague.
+    // Falling through to the qty-0 branch would both throw the real quantity
+    // away and leave "2 tablespoons ghee" as the ingredient name, which then
+    // matches nothing in the price book.
+    const quantified = parseQtyUnit(stripped);
+    if (quantified && quantified.rest) {
+      const { name: qName, notes: qTrailing } = splitTrailingNotes(quantified.rest);
+      const ingredientName = cleanName(qName);
+      if (ingredientName) {
+        if (qTrailing) notes.push(qTrailing);
+        return {
+          ...base,
+          ingredientName,
+          quantity: round(quantified.quantity),
+          unit: quantified.unit,
+          notes: [line.match(TO_TASTE_RE)[0], ...notes].join("; "),
+          status: "estimated",
+        };
+      }
+    }
+
+    const name = cleanName(stripped);
     if (!name) return { ...base, ingredientName: "", quantity: 0, unit: "g", status: "unparsed" };
     return {
       ...base,
@@ -208,6 +254,27 @@ export function parseIngredientLine(rawLine) {
 
   // Form A: "2 cups flour" — quantity first
   let qtyFirst = parseQtyUnit(line);
+
+  // "8 cloves" / "4 bay leaves" — the unit word IS the ingredient. Without this
+  // the unit alias eats the only noun on the line and nothing is left to name,
+  // so the line dies as unparsed. Only count words qualify: "2 cups" or "500 g"
+  // with nothing after it is a missing ingredient, not an ingredient called
+  // "cups". Quantity is re-read from the line because the unit factor has
+  // already been applied to it (a "dozen" would otherwise come back as 12).
+  if (qtyFirst && !qtyFirst.rest && qtyFirst.unitWord && UNITS[qtyFirst.unit]?.type === "count") {
+    const bare = parseQtyUnit(line.replace(/^(\S+)\s+\S+/, "$1"));
+    if (bare) {
+      return {
+        ...base,
+        ingredientName: cleanName(qtyFirst.unitWord),
+        quantity: round(bare.quantity),
+        unit: "piece",
+        notes: notes.join("; "),
+        status: "estimated",
+      };
+    }
+  }
+
   if (qtyFirst && qtyFirst.rest) {
     const { name, notes: trailing } = splitTrailingNotes(qtyFirst.rest);
     const ingredientName = cleanName(name);
