@@ -1,3 +1,19 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Chart color roles.
+   The app renders dark-only (see app/layout.js), so these are the dark-surface
+   steps of the palette, validated as a categorical set against the card
+   surface #111527: worst-pair CVD deltaE 31.6, normal-vision 34.4, both series
+   clear 3:1 contrast. Charts reference the roles, never raw hex, so adding a
+   light mode later is one extra block here rather than an edit per chart. */
+.viz {
+  --viz-series-1: #4f7cff;
+  --viz-series-2: #c98500;
+  --viz-grid: #242c4a;
+  --viz-axis: #4a5680;
+  --viz-muted: #7a86ab;
+  /* observed min-max band behind a line — series-1 at low alpha */
+  --viz-band: rgba(79, 124, 255, 0.14);
+}

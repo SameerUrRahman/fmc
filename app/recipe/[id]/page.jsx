@@ -2,6 +2,7 @@ import connectMongoDB from "@/libs/mongodb";
 import Recipe from "@/models/Recipe";
 import KnownIngredients from "@/models/knownIngredient";
 import RecipeWorkspace from "@/components/RecipeWorkspace";
+import { getHistoryFor } from "@/libs/priceHistory";
 import mongoose from "mongoose";
 
 export const dynamic = "force-dynamic";
@@ -21,5 +22,19 @@ export default async function RecipePage({ params }) {
   }
   const recipe = JSON.parse(JSON.stringify(recipeDoc));
   const knownIngredients = JSON.parse(JSON.stringify(knownDocs));
-  return <RecipeWorkspace initialRecipe={recipe} knownIngredients={knownIngredients} />;
+  // history for this recipe's ingredients only, each restated in the unit the
+  // recipe line is priced in so the replay and the stored price are comparable
+  const history = await getHistoryFor(
+    recipe.ingredients.map((i) => ({
+      ingredientName: i.ingredientName,
+      priceUnit: i.priceUnit,
+    }))
+  );
+  return (
+    <RecipeWorkspace
+      initialRecipe={recipe}
+      knownIngredients={knownIngredients}
+      history={history}
+    />
+  );
 }

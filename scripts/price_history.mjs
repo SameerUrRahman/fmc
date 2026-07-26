@@ -1,5 +1,7 @@
-// Inspect the price history from the terminal. Useful until the charts in the
-// app exist, and as a sanity check that the daily cron is actually appending.
+// Inspect the price history from the terminal. The app now charts this too, but
+// this stays the quickest sanity check that the daily cron is actually
+// appending — and it reads raw rows, where the charts collapse multi-source
+// days to one point.
 //
 //   node scripts/price_history.mjs            # summary across all ingredients
 //   node scripts/price_history.mjs onion      # one ingredient's series

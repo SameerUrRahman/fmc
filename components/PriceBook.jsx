@@ -17,6 +17,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { PRICE_UNITS } from "@/libs/units";
 import { DeleteIcon } from "./DeleteIcon";
+import Sparkline from "./Sparkline";
 
 function staleness(fetchedAt) {
   if (!fetchedAt) return { label: "never updated", color: "danger" };
@@ -26,7 +27,7 @@ function staleness(fetchedAt) {
   return { label: `${days}d ago`, color: "danger" };
 }
 
-export default function PriceBook({ ingredients }) {
+export default function PriceBook({ ingredients, history = {} }) {
   const router = useRouter();
   const [newName, setNewName] = useState("");
   const [newPrice, setNewPrice] = useState("");
@@ -34,6 +35,7 @@ export default function PriceBook({ ingredients }) {
   const [busy, setBusy] = useState(false);
   // per-row edit buffer: { [id]: { price, priceUnit } }
   const [edits, setEdits] = useState({});
+  const trendable = ingredients.filter((i) => history[i.ingredientName]?.stats?.enough).length;
 
   const addIngredient = async () => {
     if (!newName.trim() || newPrice === "") {
@@ -100,6 +102,15 @@ export default function PriceBook({ ingredients }) {
         <p className="text-default-500 text-sm">
           Current market prices used to autofill recipes. Update by hand or via the price-sync scripts.
         </p>
+        {trendable > 0 ? (
+          <p className="text-default-400 text-xs mt-1">
+            {trendable} of {ingredients.length} ingredients have enough history to trend.
+          </p>
+        ) : (
+          <p className="text-default-400 text-xs mt-1">
+            No ingredient has two days of history yet — trends fill in as the daily sync runs.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-end gap-2">
@@ -147,6 +158,7 @@ export default function PriceBook({ ingredients }) {
           <TableColumn>PRICE</TableColumn>
           <TableColumn>PER</TableColumn>
           <TableColumn>SOURCE</TableColumn>
+          <TableColumn>90-DAY TREND</TableColumn>
           <TableColumn>UPDATED</TableColumn>
           <TableColumn align="center">ACTIONS</TableColumn>
         </TableHeader>
@@ -155,6 +167,7 @@ export default function PriceBook({ ingredients }) {
             const edit = edits[ing._id] ?? {};
             const stale = staleness(ing.fetchedAt);
             const isEdited = edits[ing._id] !== undefined;
+            const hist = history[ing.ingredientName];
             return (
               <TableRow key={ing._id}>
                 <TableCell>{ing.ingredientName}</TableCell>
@@ -191,6 +204,13 @@ export default function PriceBook({ ingredients }) {
                 </TableCell>
                 <TableCell>
                   <Chip size="sm" variant="flat">{ing.source || "manual"}</Chip>
+                </TableCell>
+                <TableCell>
+                  <Sparkline
+                    points={hist?.points}
+                    stats={hist?.stats}
+                    priceUnit={ing.priceUnit}
+                  />
                 </TableCell>
                 <TableCell>
                   <Chip size="sm" variant="flat" color={stale.color}>{stale.label}</Chip>

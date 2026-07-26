@@ -12,6 +12,8 @@ import {
   Select,
   SelectItem,
   Slider,
+  Tab,
+  Tabs,
   Tooltip,
   addToast,
   useDisclosure,
@@ -22,6 +24,9 @@ import { useRouter } from "next/navigation";
 import { QUANTITY_UNITS, PRICE_UNITS, lineCost, recipeCost, formatINR } from "@/libs/units";
 import { DeleteIcon } from "./DeleteIcon";
 import ImportIngredientsModal from "./ImportIngredientsModal";
+import CostBreakdown from "./CostBreakdown";
+import CostOverTime from "./CostOverTime";
+import WhatIfPanel from "./WhatIfPanel";
 
 const emptyLine = () => ({
   key: crypto.randomUUID(),
@@ -51,12 +56,14 @@ function SummaryRow({ label, value, strong, color }) {
   );
 }
 
-export default function RecipeWorkspace({ initialRecipe, knownIngredients }) {
+export default function RecipeWorkspace({ initialRecipe, knownIngredients, history = {} }) {
   const router = useRouter();
   const [name, setName] = useState(initialRecipe.name);
   const [servings, setServings] = useState(String(initialRecipe.servings ?? 1));
   const [overheadPct, setOverheadPct] = useState(String(initialRecipe.overheadPct ?? 0));
   const [marginPct, setMarginPct] = useState(30);
+  // reverse pricing: a price you already have in mind, read back as a margin
+  const [targetPrice, setTargetPrice] = useState("");
   const [lines, setLines] = useState(() =>
     initialRecipe.ingredients.length > 0
       ? initialRecipe.ingredients.map((ing) => ({ ...ing, key: ing._id ?? crypto.randomUUID() }))
@@ -113,6 +120,24 @@ export default function RecipeWorkspace({ initialRecipe, knownIngredients }) {
     [lines, servings, overheadPct]
   );
   const suggestedPrice = totals.perServing * (1 + marginPct / 100);
+
+  const activeLines = useMemo(
+    () => lines.filter((l) => l.ingredientName.trim() !== ""),
+    [lines]
+  );
+
+  // Reverse pricing: given a sell price, what margin does it actually leave,
+  // and what is the most an ingredient basket can cost to still hit it?
+  const reverse = useMemo(() => {
+    const target = Number(targetPrice);
+    if (!Number.isFinite(target) || target <= 0 || totals.perServing <= 0) return null;
+    const overheadMultiplier = 1 + (Number(overheadPct) || 0) / 100;
+    return {
+      marginPct: ((target - totals.perServing) / totals.perServing) * 100,
+      // strip overhead back out to get the ingredient budget the price implies
+      maxIngredientCost: (target * (Number(servings) || 1)) / overheadMultiplier,
+    };
+  }, [targetPrice, totals.perServing, overheadPct, servings]);
 
   const save = async () => {
     setSaving(true);
@@ -366,12 +391,74 @@ export default function RecipeWorkspace({ initialRecipe, knownIngredients }) {
               color="text-success"
             />
 
+            <Divider className="bg-default-100" />
+
+            {/* the same relationship read backwards: price in, margin out */}
+            <Input
+              type="number"
+              min="0"
+              label="…or price it at"
+              labelPlacement="outside"
+              size="sm"
+              placeholder="target ₹ / serving"
+              startContent={<span className="text-default-400 text-sm">₹</span>}
+              value={targetPrice}
+              onValueChange={setTargetPrice}
+              classNames={inputClasses}
+            />
+            {reverse && (
+              <div className="flex flex-col gap-1">
+                <SummaryRow
+                  label="Margin that leaves"
+                  value={`${reverse.marginPct >= 0 ? "+" : ""}${reverse.marginPct.toFixed(0)}%`}
+                  color={reverse.marginPct < 0 ? "text-danger" : "text-success"}
+                />
+                <SummaryRow
+                  label="Ingredient budget"
+                  value={formatINR(reverse.maxIngredientCost)}
+                />
+                <p className="text-default-400 text-xs">
+                  {reverse.marginPct < 0
+                    ? "Below cost at this price."
+                    : `Ingredients can cost up to ${formatINR(reverse.maxIngredientCost)} total and still hit it.`}
+                </p>
+              </div>
+            )}
+
             <Button color="primary" size="lg" onPress={save} isLoading={saving} isDisabled={!dirty} fullWidth>
               {dirty ? "Save recipe" : "Saved ✓"}
             </Button>
           </CardBody>
         </Card>
       </div>
+
+      {/* analysis over the price history behind this recipe */}
+      <Card className="border border-default-100">
+        <CardBody className="p-5">
+          <Tabs aria-label="Cost analysis" variant="underlined" classNames={{ panel: "pt-4" }}>
+            <Tab key="breakdown" title="Breakdown">
+              <CostBreakdown lines={activeLines} subtotal={totals.subtotal} />
+            </Tab>
+            <Tab key="trend" title="Cost over time">
+              <CostOverTime
+                lines={activeLines}
+                history={history}
+                servings={Number(servings) || 1}
+                overheadPct={Number(overheadPct) || 0}
+              />
+            </Tab>
+            <Tab key="whatif" title="What if">
+              <WhatIfPanel
+                lines={activeLines}
+                history={history}
+                servings={servings}
+                overheadPct={overheadPct}
+                baseTotal={totals.total}
+              />
+            </Tab>
+          </Tabs>
+        </CardBody>
+      </Card>
     </div>
   );
 }

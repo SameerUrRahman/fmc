@@ -14,6 +14,9 @@ Built with Next.js (App Router), MongoDB Atlas, and HeroUI.
 - **Unit-aware costing** — prices are entered per kg/L/piece; recipe quantities in any unit. Volume↔weight conversions use a built-in density table for ~35 common ingredients (a cup of flour ≠ a cup of honey). Lines that can't be costed show a warning with the reason instead of a wrong number.
 - **Price book** — one place for current ingredient prices, with source and freshness (`3d ago`) per entry. Recipe autocomplete autofills from it.
 - **Price sync** — scripts to pull daily Telangana mandi prices from data.gov.in and (best-effort) BigBasket prices for packaged goods, plus a GitHub Actions cron to run the gov sync daily.
+- **Trends & scenarios** — a sparkline per price-book row, a chart of what each recipe would have cost on every day there are prices for, a ranked breakdown of which ingredients drive the cost, and a what-if slider bounded by each ingredient's *observed* price range ("every price at its peak, this recipe costs ₹X"). Plus reverse pricing: name a selling price, see the margin and ingredient budget it implies.
+
+What's planned next and why is in [ROADMAP.md](ROADMAP.md).
 
 ## Setup
 
@@ -66,10 +69,13 @@ The price book (`KnownIngredients`) answers "what does onion cost *now*". It's a
 materialized view: every sync overwrites it in place, so on its own it has no memory.
 
 `PriceSnapshot` is the append-only log behind it — one document per
-**(ingredient, source, IST day)**. Every price writer in the repo goes through
-`upsertPrice()` in [scripts/_shared.mjs](scripts/_shared.mjs), which updates the
-current value *and* appends the observation, so history can't be silently lost by
-a script that forgets to record it.
+**(ingredient, source, IST day)**. Every price writer in the repo goes through an
+`upsertPrice()`: [scripts/_shared.mjs](scripts/_shared.mjs) for the `.mjs` sync
+scripts, [libs/prices.js](libs/prices.js) for the app's own API routes. Both
+update the current value *and* append the observation, so history can't be
+silently lost by a writer that forgets to record it. (The web routes originally
+wrote `KnownIngredients` directly, which meant a price edited by hand in the UI
+never reached the log — the same class of bug the snapshot log was built to fix.)
 
 Two details that matter:
 
@@ -84,6 +90,29 @@ Two details that matter:
 
 Everything before the first backfill is genuinely gone; the old sync overwrote
 prices in place. History starts from the day snapshots landed.
+
+### What the charts do with it
+
+Reading is in [libs/priceHistory.js](libs/priceHistory.js) (server-only, touches
+the model) and [libs/trends.js](libs/trends.js) (pure, no database, no React —
+the part worth unit-testing).
+
+- **Observations are restated in the row's current price unit** before charting.
+  Otherwise switching an ingredient from ₹/kg to ₹/g draws a 1000× cliff that
+  never happened.
+- **Same day, several feeds → one point**, resolved by a source precedence
+  (`purchase > doca-retail > bigbasket > data.gov.in > manual > llm-estimate`).
+  Tiers are allowed to be absent; most don't exist yet.
+- **Recipe cost over time** prices each ingredient at its most recent observation
+  on or before each day. Feeds report on their own cadence, so requiring every
+  ingredient to have a reading on the same day would leave almost no days at all.
+  Each point carries a **coverage** figure — how much of that day's cost came
+  from a real observation — so a flat line can be read as "only one ingredient is
+  tracked" rather than "prices were stable".
+- **Nothing is drawn below two distinct days.** The backfilled rows are one
+  observation each; charted, they'd be a confident flat line asserting stability
+  over data that says nothing. Those cells say `1 obs` instead. Expect that state
+  until roughly mid-September 2026.
 
 ## How costing works
 

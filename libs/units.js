@@ -114,6 +114,23 @@ export function convertQuantity(quantity, fromUnit, toUnit, density = null) {
 }
 
 /**
+ * Restate a price in a different price unit.
+ * "₹80 per kg" -> "₹0.08 per g". Used when a historical observation was
+ * recorded in a different unit than the one the price book shows today, so a
+ * series doesn't chart a unit change as a 1000x price spike.
+ * @returns {number|null} null when the units can't be bridged.
+ */
+export function convertPrice(price, fromPriceUnit, toPriceUnit, density = null) {
+  const p = Number(price);
+  if (!Number.isFinite(p)) return null;
+  if (fromPriceUnit === toPriceUnit) return p;
+  // how many "from" units are in one "to" unit — that many lots of the price
+  const fromPerTo = convertQuantity(1, toPriceUnit, fromPriceUnit, density);
+  if (fromPerTo === null) return null;
+  return p * fromPerTo;
+}
+
+/**
  * Cost of one recipe line.
  * @param {object} line { quantity, unit, price, priceUnit, ingredientName }
  * @returns {{ cost: number|null, error: string|null }}
