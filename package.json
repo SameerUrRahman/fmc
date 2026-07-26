@@ -9,7 +9,9 @@
     "lint": "next lint",
     "seed": "node scripts/seed_prices.mjs",
     "prices:gov": "node scripts/fetch_gov_prices.mjs",
-    "prices:bigbasket": "node scripts/scrape_bigbasket.mjs"
+    "prices:bigbasket": "node scripts/scrape_bigbasket.mjs",
+    "prices:backfill": "node scripts/backfill_snapshots.mjs",
+    "prices:history": "node scripts/price_history.mjs"
   },
   "dependencies": {
     "@heroui/react": "2.7",
