@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \"tests/*.test.mjs\"",
     "lint": "next lint",
     "seed": "node scripts/seed_prices.mjs",
     "prices:gov": "node scripts/fetch_gov_prices.mjs",

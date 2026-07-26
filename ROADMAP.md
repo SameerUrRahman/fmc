@@ -78,7 +78,15 @@ One change across `libs/units.js`, the models, and `RecipeWorkspace`:
 - **Yield/waste factor** per ingredient — a peeled onion isn't 100% usable.
 - **Unit tests for `libs/units.js`** — it's pure, deterministic, and the trickiest
   code in the repo (density crossover, the count↔mass refusal, the `needsDensity`
-  branch). `mongodb-memory-server` is already a devDependency.
+  branch), and `convertPrice()` is now load-bearing for the trend charts.
+  `libs/trends.js` wants the same treatment.
+
+  The harness already exists: `npm test` runs `node:test` over `tests/*.test.mjs`
+  — no test-framework dependency, and Node ≥22.7 detects the module syntax in the
+  ESM-in-`.js` libs so they import with no build step. `tests/ingredientParser.test.mjs`
+  is the worked example; it was mutation-checked (reverting the bullet fix fails
+  4 of its 12 cases). Adding units/trends coverage is now writing cases, not
+  standing up infrastructure.
 
 ### 3. Shopping list / batch planner — `M`
 Select recipes at target servings, scale, normalize, aggregate, price the basket.

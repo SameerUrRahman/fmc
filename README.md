@@ -44,6 +44,7 @@ npm run seed           # seed the price book with ~40 Indian staples
 
 | Script | What it does |
 | --- | --- |
+| `npm test` | Runs `node:test` over `tests/*.test.mjs`. No test-framework dependency and no build step — Node ≥22.7 detects the module syntax in the ESM-in-`.js` libs. No database needed; the covered code is pure. |
 | `npm run seed` | Seeds/updates the price book with common staples; migrates legacy entries. |
 | `npm run prices:gov` | Pulls daily mandi prices (data.gov.in, Agmarknet) for Telangana → price book. Needs `DATA_GOV_API_KEY` (free from [data.gov.in](https://data.gov.in)). Mandi = wholesale; retail runs ~20–40% higher. Coverage varies day to day — markets don't report every commodity, so a typical run updates 8–12 of the ~23 mapped names, mostly fresh produce. |
 | `npm run prices:bigbasket` | Best-effort Playwright scrape of packaged-goods prices. Install first: `npm i -D playwright && npx playwright install chromium`. Personal-scale use only. |
