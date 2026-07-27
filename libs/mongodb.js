@@ -1,10 +1,22 @@
 import dns from "node:dns";
+import dnsPromises from "node:dns/promises";
 import mongoose from "mongoose";
 
 // Some local resolvers (VPN clients, corporate DNS, Cloudflare WARP) refuse
 // SRV queries, which breaks mongodb+srv:// connections with an ECONNREFUSED
 // on the DNS lookup itself, not the DB. Public resolvers always answer them.
-dns.setServers(["8.8.8.8", "1.1.1.1"]);
+//
+// Both APIs must be set. Node binds the callback and promise DNS APIs to the
+// default resolver when each is first loaded, and `dns.setServers()` only
+// reliably rebinds the callback side — whether `dns.promises` picks it up
+// depends on load order, and under Next/Turbopack it loses that race and keeps
+// the system resolver. The mongodb driver resolves SRV with
+// `dns.promises.resolve(host, "SRV")`, i.e. the one resolver the override was
+// missing, so pages 500d with ECONNREFUSED while `dns.getServers()` reported
+// 8.8.8.8.
+const DNS_SERVERS = ["8.8.8.8", "1.1.1.1"];
+dns.setServers(DNS_SERVERS);
+dnsPromises.setServers(DNS_SERVERS); // the one the driver actually reads
 
 const MONGODB_URI = process.env.MONGODB_URI;
 

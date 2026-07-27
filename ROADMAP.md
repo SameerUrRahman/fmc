@@ -213,14 +213,27 @@ input channel rather than deepening the data pipeline, same reasoning as item 9.
 
 ## Known small defects
 
-- **`dns.setServers()` in `libs/mongodb.js` doesn't reach the driver's SRV
-  lookup.** On a network where the system resolver refuses SRV queries, every
-  page 500s with `querySrv ECONNREFUSED` even though the workaround is in place.
-  Reproduced 2026-07-28: from plain Node, `new Resolver()` with the system DNS
-  fails while `8.8.8.8` and `1.1.1.1` both resolve the cluster fine — so the
-  override is being set on a resolver the driver isn't using. `scripts/local_db.mjs`
-  + `.env.local` is the working fallback meanwhile. Worth confirming whether the
-  driver constructs its own `Resolver` before assuming the current fix works.
+- ~~**`dns.setServers()` in `libs/mongodb.js` doesn't reach the driver's SRV
+  lookup.**~~ Fixed 2026-07-28. The hunch was right — the override was landing on
+  a resolver the driver wasn't using — and it was the *promise* API. Node binds
+  the callback and promise DNS APIs to the default resolver when each is first
+  loaded; `dns.setServers()` only reliably rebinds the callback side, and whether
+  `dns.promises` follows depends on load order. Under Next/Turbopack it loses that
+  race, so inside one process `dns.getServers()` reported `8.8.8.8` while
+  `dns.promises.getServers()` still reported the system stub. The driver resolves
+  SRV with `dns.promises.resolve(host, "SRV")`, so it read the stale one and every
+  page 500d. Adding `dnsPromises.setServers()` alongside removes the load-order
+  dependency; done in both `libs/mongodb.js` and `scripts/_shared.mjs`.
+
+  The tell that it was load-order and not the driver: API routes connected fine
+  while page renders 500d in the *same* pid, and a second module eval after HMR
+  came up correct.
+
+  Worth noting this is a workaround for one machine's resolver (a 127.0.0.1 stub
+  that refuses SRV), not a bug others hit — Atlas + Next needs none of this on a
+  normal network. It ships to Vercel, where it needlessly forces public DNS.
+  Gating it behind an env var, or fixing the local resolver and deleting it, is
+  the cleaner end state.
 
 - `npm run lint` is broken — `next lint` was removed in Next.js 16, so the script
   is parsed as `next <dir>`: *"Invalid project directory provided, no such

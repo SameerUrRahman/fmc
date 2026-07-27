@@ -4,12 +4,18 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import dns from "node:dns";
+import dnsPromises from "node:dns/promises";
 import mongoose from "mongoose";
 
 // Some local resolvers (VPN clients, corporate DNS, Cloudflare WARP) refuse
 // SRV queries, which breaks mongodb+srv:// connections with an ECONNREFUSED
 // on the DNS lookup itself, not the DB. Public resolvers always answer them.
-dns.setServers(["8.8.8.8", "1.1.1.1"]);
+// Both APIs must be set — the mongodb driver resolves SRV through
+// `dns.promises`, which `dns.setServers()` does not reliably rebind. See the
+// same comment in libs/mongodb.js.
+const DNS_SERVERS = ["8.8.8.8", "1.1.1.1"];
+dns.setServers(DNS_SERVERS);
+dnsPromises.setServers(DNS_SERVERS);
 
 export function loadEnv() {
   const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
