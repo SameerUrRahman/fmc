@@ -5,7 +5,7 @@ import { matchKnownIngredient, MATCH_THRESHOLD } from "@/libs/ingredientMatch";
 import { llmAvailable, extractIngredientsLLM } from "@/libs/llmExtract";
 import { NextResponse } from "next/server";
 
-// POST { text } -> { items, llm: { available, used, error } }
+// POST { text } -> { items, llm: { available, used, error, code, retryAfterSec } }
 // Parses pasted recipe text into draft ingredient lines: regex first,
 // free-tier LLM rescue for lines regex couldn't handle, then fuzzy match
 // against the price book to autofill prices. Nothing is saved here —
@@ -21,7 +21,13 @@ export async function POST(request) {
   }
 
   const items = parseIngredientText(text);
-  const llm = { available: llmAvailable(), used: false, error: null };
+  const llm = {
+    available: llmAvailable(),
+    used: false,
+    error: null,
+    code: null,
+    retryAfterSec: null,
+  };
 
   // LLM rescue for unparsed lines only — keeps free-tier usage tiny
   const unparsedIdx = items
@@ -36,7 +42,10 @@ export async function POST(request) {
       }
       llm.used = true;
     } catch (e) {
+      // LlmError carries a classified code; anything else is unexpected
       llm.error = String(e.message || e);
+      llm.code = e?.code ?? "unknown";
+      llm.retryAfterSec = e?.retryAfterSec ?? null;
     }
   }
 

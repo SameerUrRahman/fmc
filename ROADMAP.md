@@ -106,18 +106,29 @@ This is the chart that turns the guessed 20–40% wholesale→retail markup into
 measured, per-commodity, time-varying number, so it's the real payoff of item 1
 rather than a nice-to-have on top of it.
 
-### 5. Harden `llmExtract` — `S`
-Plumbing, not polish: item 6 can't be built safely without it.
+### ~~5. Harden `llmExtract`~~ — done
+Plumbing for item 6, shipped ahead of it.
 
-- **Per-call model override.** `LLM_MODEL` is global today. Price estimates should
-  run on `llama-3.1-8b-instant`, not the 70b — a ballpark price doesn't need it,
-  it's faster, and Groq's rate-limit buckets are **per model** (verified: 12k TPM
-  on `llama-3.3-70b-versatile` vs 8k TPM on `gpt-oss-20b`, independent counters),
-  so splitting workloads buys real headroom instead of competing with imports.
-- **Distinguish 429 from other failures.** A rate-limit error currently lands in
-  the generic `catch` and surfaces as an opaque `llm.error`. Read `retry-after` /
-  `x-ratelimit-reset-*` and return something the UI can render as "rate limited,
-  try again in Ns".
+- **Per-task model selection.** `modelFor(task, provider, override)` resolves
+  explicit argument → `LLM_MODEL_<TASK>` → `LLM_MODEL` → per-task default, so
+  `extract` stays on the 70b while `estimate` gets `llama-3.1-8b-instant`.
+  Groq's rate-limit buckets are **per model** with independent counters, so this
+  is headroom, not cosmetics.
+- **Classified failures.** Calls now throw `LlmError` with `code`
+  (`rate_limited` / `auth` / `server` / `network` / `bad_response` /
+  `no_provider`), `status`, and `retryAfterSec`, surfaced through
+  `/api/recipes/parse` as `llm.code` / `llm.retryAfterSec`. The importer renders
+  a rate limit as a live countdown with a retry button that unlocks at zero, and
+  a bad key as a plain failure with no retry affordance — retrying that never
+  helps.
+- **Covered by tests** (`tests/llmExtract.test.mjs`, 17 cases): the model
+  precedence chain, `retry-after` / `x-ratelimit-reset-*` / Go-duration /
+  HTTP-date parsing, and 429 / 401 / 503 classification driven through the real
+  code path with a stubbed `fetch`. Writing them caught a live bug — the
+  body-prose fallback regex swallowed the trailing full stop in
+  *"try again in 7.66s."* and parsed to `null`, which would have shown "try
+  again shortly" instead of a countdown on exactly the responses that omit the
+  headers.
 
 Free-tier budget, for reference: **30 RPM / 1,000 RPD / 12k TPM / 100k TPD.** All
 unparsed lines are batched into one request, so an import is one call regardless
@@ -134,7 +145,7 @@ same paste needs **zero** LLM lines. Budget for the LLM as a rescue path for
 genuinely odd input, and treat a high LLM-line count on ordinary recipes as a
 parser bug rather than an expected cost.
 
-### 6. Unknown-ingredient handling — `S` *(needs item 5)*
+### 6. Unknown-ingredient handling — `S` *(unblocked — item 5 shipped)*
 On a price-book miss: try a live data.gov.in lookup (JSON API, fast, no bot
 protection), fall back to an LLM price estimate via the existing
 `libs/llmExtract.js` adapter (`source: "llm-estimate"`, flagged in the UI, bottom
@@ -201,6 +212,15 @@ input channel rather than deepening the data pipeline, same reasoning as item 9.
 - **Per-user auth.** Deliberately deferred; the live instance is a demo.
 
 ## Known small defects
+
+- **`dns.setServers()` in `libs/mongodb.js` doesn't reach the driver's SRV
+  lookup.** On a network where the system resolver refuses SRV queries, every
+  page 500s with `querySrv ECONNREFUSED` even though the workaround is in place.
+  Reproduced 2026-07-28: from plain Node, `new Resolver()` with the system DNS
+  fails while `8.8.8.8` and `1.1.1.1` both resolve the cluster fine — so the
+  override is being set on a resolver the driver isn't using. `scripts/local_db.mjs`
+  + `.env.local` is the working fallback meanwhile. Worth confirming whether the
+  driver constructs its own `Resolver` before assuming the current fix works.
 
 - `npm run lint` is broken — `next lint` was removed in Next.js 16, so the script
   is parsed as `next <dir>`: *"Invalid project directory provided, no such

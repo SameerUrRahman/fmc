@@ -14,7 +14,7 @@ import {
   Tooltip,
   addToast,
 } from "@heroui/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { QUANTITY_UNITS, formatINR } from "@/libs/units";
 
 const STATUS_META = {
@@ -34,13 +34,22 @@ export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport 
   const [llmInfo, setLlmInfo] = useState(null);
   const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [cooldown, setCooldown] = useState(0); // seconds left on a 429
 
   const reset = () => {
     setItems(null);
     setLlmInfo(null);
     setParsing(false);
     setImporting(false);
+    setCooldown(0);
   };
+
+  // tick the rate-limit countdown down to zero
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
 
   const parse = async () => {
     setParsing(true);
@@ -54,6 +63,7 @@ export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport 
       if (!res.ok) throw new Error(data.error || "parse failed");
       setItems(data.items.map((it) => ({ ...it, key: crypto.randomUUID() })));
       setLlmInfo(data.llm);
+      setCooldown(data.llm?.code === "rate_limited" ? Math.ceil(data.llm.retryAfterSec ?? 0) : 0);
     } catch (e) {
       addToast({ title: "Couldn't parse", description: String(e.message), color: "danger" });
     } finally {
@@ -147,10 +157,33 @@ export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport 
                 />
               ) : (
                 <div className="flex flex-col gap-3">
-                  {llmInfo?.error && (
-                    <p className="text-sm text-warning">
-                      AI rescue failed ({llmInfo.error}) — unparsed lines need manual fixing.
-                    </p>
+                  {llmInfo?.code === "rate_limited" ? (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <p className="text-sm text-warning">
+                        AI rescue hit the free-tier rate limit
+                        {cooldown > 0 ? ` — try again in ${cooldown}s.` : " — you can try again now."}{" "}
+                        Unparsed lines can still be fixed by hand.
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color="warning"
+                        isDisabled={cooldown > 0 || parsing}
+                        isLoading={parsing}
+                        onPress={parse}
+                      >
+                        Retry AI rescue
+                      </Button>
+                      <span className="text-xs text-default-400 basis-full">
+                        Retrying re-parses the pasted text, so edits below are lost.
+                      </span>
+                    </div>
+                  ) : (
+                    llmInfo?.error && (
+                      <p className="text-sm text-warning">
+                        AI rescue failed ({llmInfo.error}) — unparsed lines need manual fixing.
+                      </p>
+                    )
                   )}
                   {!llmInfo?.available && items.some((it) => it.status === "unparsed") && (
                     <p className="text-sm text-default-500">

@@ -31,7 +31,8 @@ Copy `.env.example` to `.env` and fill it in (never commit `.env`):
 | `MONGODB_URI` | **yes** | Atlas connection string. |
 | `DATA_GOV_API_KEY` | for price sync | Free key from [data.gov.in](https://data.gov.in). Without it `npm run prices:gov` exits immediately. |
 | `GROQ_API_KEY` *or* `GEMINI_API_KEY` | optional | LLM rescue for ingredient lines the regex parser can't handle. Without a key the importer still works — unparsed lines just stay flagged for manual entry. |
-| `LLM_PROVIDER` / `LLM_MODEL` | optional | Force a provider or override the default model. |
+| `LLM_PROVIDER` / `LLM_MODEL` | optional | Force a provider, or override the model for every task. |
+| `LLM_MODEL_EXTRACT` / `LLM_MODEL_ESTIMATE` | optional | Override the model for one task only. Takes priority over `LLM_MODEL`. |
 
 Then:
 
@@ -114,6 +115,33 @@ the part worth unit-testing).
   observation each; charted, they'd be a confident flat line asserting stability
   over data that says nothing. Those cells say `1 obs` instead. Expect that state
   until roughly mid-September 2026.
+
+## How the LLM rescue behaves
+
+The importer runs the regex parser first and only sends the lines it couldn't
+handle to an LLM — one batched request per import, regardless of length. The
+adapter is [libs/llmExtract.js](libs/llmExtract.js).
+
+- **Models are picked per task, not globally.** Groq's free-tier rate limits are
+  bucketed *per model* with independent counters, so a cheap task on a different
+  model buys real headroom instead of competing with imports. Extraction has to
+  emit a schema and gets the 70b; price estimates are a ballpark and get
+  `llama-3.1-8b-instant`. Resolution order is
+  explicit argument → `LLM_MODEL_<TASK>` → `LLM_MODEL` → per-task default.
+- **Failures are classified, not stringified.** Calls throw an `LlmError`
+  carrying `code` (`rate_limited` / `auth` / `server` / `network` /
+  `bad_response` / `no_provider`), the HTTP status, and `retryAfterSec`. A 429
+  reads `retry-after` first, then the longest `x-ratelimit-reset-*` window, then
+  the wait Groq repeats in the response body — the headers don't say *which*
+  bucket was exhausted, and waiting too long costs one slow import while waiting
+  too little costs a second 429.
+- **The UI acts on the difference.** A rate limit shows a live countdown and a
+  retry button that unlocks when it hits zero; a bad key doesn't, because
+  retrying it will never work.
+
+The free-tier budget is 30 RPM / 1,000 RPD / 12k TPM / 100k TPD. Token cost
+scales with how much the regex parser *missed*, so a high LLM-line count on an
+ordinary recipe is a parser bug, not an expected cost.
 
 ## How costing works
 

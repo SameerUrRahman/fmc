@@ -3,13 +3,61 @@
 // to whichever key is present). Without a key the feature is simply off —
 // the importer still works, unparsed lines just stay flagged for manual fix.
 //
-//   GROQ_API_KEY    — free at console.groq.com   (default model: llama-3.3-70b-versatile)
-//   GEMINI_API_KEY  — free at aistudio.google.com (default model: gemini-2.5-flash)
-//   LLM_MODEL       — optional model override for either provider
+//   GROQ_API_KEY    — free at console.groq.com
+//   GEMINI_API_KEY  — free at aistudio.google.com
+//
+// Model selection is per *task*, not global. Groq's rate-limit buckets are
+// per model with independent counters, so running the cheap task on a
+// different model buys real headroom instead of competing with imports:
+//
+//   LLM_MODEL           — override every task (blunt instrument, kept for compat)
+//   LLM_MODEL_EXTRACT   — the ingredient extractor (needs to follow a schema)
+//   LLM_MODEL_ESTIMATE  — ballpark price estimates (small/fast is fine)
+//
+// Failures come back as LlmError with a `code`, so a 429 is distinguishable
+// from a dead key or a garbled response. Callers can render
+// "rate limited, try again in Ns" instead of an opaque string.
 
 import { normalizeUnit } from "./ingredientParser.js";
 
 const VALID_UNITS = ["g", "kg", "mL", "L", "tsp", "tbsp", "cup", "piece", "dozen"];
+
+// task -> per-provider default. Extraction has to emit a schema, so it gets
+// the bigger model; an estimate is a ballpark and doesn't.
+const MODEL_DEFAULTS = {
+  extract: { groq: "llama-3.3-70b-versatile", gemini: "gemini-2.5-flash" },
+  estimate: { groq: "llama-3.1-8b-instant", gemini: "gemini-2.5-flash-lite" },
+};
+
+/**
+ * An LLM call that failed, classified.
+ * @property {string} code   rate_limited | auth | server | request | bad_response | no_provider
+ * @property {number|null} status        HTTP status, when there was one
+ * @property {number|null} retryAfterSec seconds to wait, when the provider said
+ */
+export class LlmError extends Error {
+  constructor(message, { code = "request", status = null, retryAfterSec = null, provider = null, model = null } = {}) {
+    super(message);
+    this.name = "LlmError";
+    this.code = code;
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+    this.provider = provider;
+    this.model = model;
+  }
+
+  /** Shape safe to hand to the client. */
+  toJSON() {
+    return {
+      message: this.message,
+      code: this.code,
+      status: this.status,
+      retryAfterSec: this.retryAfterSec,
+      provider: this.provider,
+      model: this.model,
+    };
+  }
+}
 
 function provider() {
   const forced = (process.env.LLM_PROVIDER || "").toLowerCase();
@@ -23,6 +71,105 @@ function provider() {
 
 export function llmAvailable() {
   return provider() !== null;
+}
+
+/**
+ * Which model runs a given task, most specific wins:
+ * explicit argument > LLM_MODEL_<TASK> > LLM_MODEL > per-task default.
+ * @param {"extract"|"estimate"} task
+ * @param {string} which provider name
+ * @param {string} [override] caller-supplied model
+ */
+export function modelFor(task, which, override) {
+  if (override) return override;
+  const perTask = process.env[`LLM_MODEL_${String(task).toUpperCase()}`];
+  if (perTask) return perTask;
+  if (process.env.LLM_MODEL) return process.env.LLM_MODEL;
+  return MODEL_DEFAULTS[task]?.[which] ?? MODEL_DEFAULTS.extract[which];
+}
+
+/**
+ * Parse a provider's "wait this long" value into seconds.
+ * Handles bare seconds ("60", "7.66"), Go-style durations ("2m59.56s",
+ * "1h2m3s", "500ms"), and HTTP-dates. Returns null if it can't tell.
+ * @param {string|number|null|undefined} value
+ * @returns {number|null}
+ */
+export function parseRetryAfter(value) {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  if (/^\d+(\.\d+)?$/.test(raw)) return Number(raw);
+
+  const duration = raw.match(/^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?$/i);
+  if (duration && duration.slice(1).some((g) => g !== undefined)) {
+    const [h, m, s, ms] = duration.slice(1).map((g) => (g === undefined ? 0 : Number(g)));
+    return h * 3600 + m * 60 + s + ms / 1000;
+  }
+
+  const at = Date.parse(raw);
+  if (!Number.isNaN(at)) return Math.max(0, (at - Date.now()) / 1000);
+
+  return null;
+}
+
+/**
+ * How long to wait after a 429, from whichever headers the provider set.
+ *
+ * `retry-after` is authoritative when present. Otherwise we take the *longest*
+ * of the reset windows: the headers don't say which bucket was exhausted, and
+ * waiting too long costs one slow import while waiting too little costs a
+ * second 429.
+ * @param {Headers|{get:(k:string)=>string|null}} headers
+ * @returns {number|null} seconds, rounded up
+ */
+export function retryAfterFromHeaders(headers) {
+  const get = (k) => (headers && typeof headers.get === "function" ? headers.get(k) : null);
+
+  const explicit = parseRetryAfter(get("retry-after"));
+  if (explicit !== null) return Math.ceil(explicit);
+
+  const resets = ["x-ratelimit-reset-requests", "x-ratelimit-reset-tokens"]
+    .map((h) => parseRetryAfter(get(h)))
+    .filter((v) => v !== null);
+  if (resets.length === 0) return null;
+  return Math.ceil(Math.max(...resets));
+}
+
+/** Map an HTTP status onto an LlmError code. */
+function codeForStatus(status) {
+  if (status === 429) return "rate_limited";
+  if (status === 401 || status === 403) return "auth";
+  if (status >= 500) return "server";
+  return "request";
+}
+
+/** Build the LlmError for a non-2xx provider response. */
+async function errorFromResponse(res, { provider: which, model }) {
+  const body = (await res.text().catch(() => "")).slice(0, 300);
+  const code = codeForStatus(res.status);
+
+  let retryAfterSec = retryAfterFromHeaders(res.headers);
+  if (code === "rate_limited" && retryAfterSec === null) {
+    // Groq repeats the wait in prose when the headers are absent:
+    // "Please try again in 7.66s." — the duration must not eat the full stop,
+    // so match unit-suffixed groups explicitly rather than a loose char class.
+    const inBody = body.match(/try again in ((?:\d+(?:\.\d+)?(?:h|ms|m|s))+|\d+(?:\.\d+)?)/i);
+    const parsed = parseRetryAfter(inBody?.[1]);
+    if (parsed !== null) retryAfterSec = Math.ceil(parsed);
+  }
+
+  const message =
+    code === "rate_limited"
+      ? retryAfterSec !== null
+        ? `rate limited — try again in ${retryAfterSec}s`
+        : "rate limited — try again shortly"
+      : code === "auth"
+        ? `${which} rejected the API key (${res.status})`
+        : `${which} ${res.status}: ${body}`;
+
+  return new LlmError(message, { code, status: res.status, retryAfterSec, provider: which, model });
 }
 
 function buildPrompt(lines) {
@@ -42,43 +189,51 @@ Input lines:
 ${numbered}`;
 }
 
-async function callGroq(prompt) {
-  const model = process.env.LLM_MODEL || "llama-3.3-70b-versatile";
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-  if (!res.ok) throw new Error(`groq ${res.status}: ${(await res.text()).slice(0, 200)}`);
+async function callGroq(prompt, model) {
+  let res;
+  try {
+    res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+  } catch (e) {
+    throw new LlmError(`couldn't reach groq: ${e.message}`, { code: "network", provider: "groq", model });
+  }
+  if (!res.ok) throw await errorFromResponse(res, { provider: "groq", model });
   const data = await res.json();
   return data.choices?.[0]?.message?.content ?? "";
 }
 
-async function callGemini(prompt) {
-  const model = process.env.LLM_MODEL || "gemini-2.5-flash";
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": process.env.GEMINI_API_KEY,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0 },
-      }),
-    }
-  );
-  if (!res.ok) throw new Error(`gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);
+async function callGemini(prompt, model) {
+  let res;
+  try {
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "x-goog-api-key": process.env.GEMINI_API_KEY,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0 },
+        }),
+      }
+    );
+  } catch (e) {
+    throw new LlmError(`couldn't reach gemini: ${e.message}`, { code: "network", provider: "gemini", model });
+  }
+  if (!res.ok) throw await errorFromResponse(res, { provider: "gemini", model });
   const data = await res.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 }
@@ -86,14 +241,20 @@ async function callGemini(prompt) {
 /**
  * Ask the LLM to extract ingredients from raw lines.
  * @param {string[]} lines raw text lines (typically the regex-unparsed ones)
+ * @param {{model?: string, task?: "extract"|"estimate"}} [options]
+ *        per-call model override; falls back to the env chain in modelFor()
  * @returns {Promise<Map<number, {ingredientName, quantity, unit, notes}>>}
  *          keyed by input line index; lines the LLM skipped are absent
+ * @throws {LlmError}
  */
-export async function extractIngredientsLLM(lines) {
+export async function extractIngredientsLLM(lines, options = {}) {
   const which = provider();
-  if (!which) throw new Error("no LLM provider configured");
+  if (!which) throw new LlmError("no LLM provider configured", { code: "no_provider" });
+  const task = options.task ?? "extract";
+  const model = modelFor(task, which, options.model);
   const prompt = buildPrompt(lines);
-  const rawText = which === "groq" ? await callGroq(prompt) : await callGemini(prompt);
+  const rawText =
+    which === "groq" ? await callGroq(prompt, model) : await callGemini(prompt, model);
 
   let parsed;
   try {
@@ -101,7 +262,13 @@ export async function extractIngredientsLLM(lines) {
   } catch {
     // some models wrap JSON in ```json fences despite instructions
     const m = rawText.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error("LLM returned non-JSON output");
+    if (!m) {
+      throw new LlmError("LLM returned non-JSON output", {
+        code: "bad_response",
+        provider: which,
+        model,
+      });
+    }
     parsed = JSON.parse(m[0]);
   }
 
