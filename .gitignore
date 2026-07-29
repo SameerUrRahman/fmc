@@ -36,3 +36,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .localdb/
+
+# local agent tooling — not part of the app, and not something a reader of
+# this repo needs to wade through
+.agent/
