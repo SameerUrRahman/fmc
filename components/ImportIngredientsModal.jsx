@@ -10,6 +10,8 @@ import {
   ModalHeader,
   Select,
   SelectItem,
+  Tab,
+  Tabs,
   Textarea,
   Tooltip,
   addToast,
@@ -28,10 +30,24 @@ const inputClasses = {
   inputWrapper: "bg-content2 data-[hover=true]:bg-content3 group-data-[focus=true]:bg-content3",
 };
 
+// How the ingredient lines were found on the page — worth showing, because
+// "read from the site's own recipe data" and "the AI guessed which lines were
+// ingredients" deserve different levels of trust in the draft below.
+const VIA_META = {
+  "json-ld": { label: "recipe data", color: "success" },
+  microdata: { label: "recipe data", color: "success" },
+  heuristic: { label: "page list", color: "warning" },
+  llm: { label: "AI-picked", color: "secondary" },
+};
+
 export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport }) {
+  const [mode, setMode] = useState("text"); // text | url
   const [text, setText] = useState("");
-  const [items, setItems] = useState(null); // null = paste step
+  const [url, setUrl] = useState("");
+  const [source, setSource] = useState(null); // { title, servings, via, sourceUrl }
+  const [items, setItems] = useState(null); // null = input step
   const [llmInfo, setLlmInfo] = useState(null);
+  const [fetching, setFetching] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [cooldown, setCooldown] = useState(0); // seconds left on a 429
@@ -51,13 +67,14 @@ export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport 
     return () => clearTimeout(t);
   }, [cooldown]);
 
-  const parse = async () => {
+  const parse = async (overrideText) => {
+    const body = overrideText ?? text;
     setParsing(true);
     try {
       const res = await fetch("/api/recipes/parse", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: body }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "parse failed");
@@ -68,6 +85,36 @@ export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport 
       addToast({ title: "Couldn't parse", description: String(e.message), color: "danger" });
     } finally {
       setParsing(false);
+    }
+  };
+
+  // URL step: pull the ingredient lines off the page, then hand them to the
+  // same parse endpoint pasted text uses. Two hops on purpose — the fetched
+  // text lands in the textarea, so a bad extraction is visible and editable
+  // rather than silently becoming a draft.
+  const fetchUrl = async () => {
+    setFetching(true);
+    try {
+      const res = await fetch("/api/recipes/import-url", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "couldn't import that URL");
+      const joined = data.ingredients.join("\n");
+      setText(joined);
+      setSource({
+        title: data.title,
+        servings: data.servings,
+        via: data.via,
+        sourceUrl: data.sourceUrl,
+      });
+      await parse(joined);
+    } catch (e) {
+      addToast({ title: "Couldn't import", description: String(e.message), color: "danger" });
+    } finally {
+      setFetching(false);
     }
   };
 
@@ -113,9 +160,11 @@ export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport 
           knownIngredientId: match?.knownIngredientId,
         });
       }
-      onImport(lines);
+      onImport(lines, source ?? null);
       addToast({ title: `Imported ${lines.length} ingredients`, color: "success" });
       setText("");
+      setUrl("");
+      setSource(null);
       reset();
       close();
     } catch (e) {
@@ -139,24 +188,75 @@ export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport 
         {(close) => (
           <>
             <ModalHeader className="flex flex-col gap-1">
-              Import ingredients from text
+              Import ingredients
               <span className="text-sm font-normal text-default-500">
-                Paste an ingredient list from anywhere — a blog, a YouTube description, WhatsApp…
+                {mode === "url"
+                  ? "Paste a recipe link — most recipe sites publish their ingredient list in a readable form."
+                  : "Paste an ingredient list from anywhere — a blog, a YouTube description, WhatsApp…"}
               </span>
             </ModalHeader>
 
             <ModalBody>
               {items === null ? (
-                <Textarea
-                  aria-label="Recipe text"
-                  minRows={10}
-                  placeholder={"2 cups maida\n1/2 tsp haldi\n2-3 hari mirch, chopped\nsalt to taste"}
-                  value={text}
-                  onValueChange={setText}
-                  classNames={inputClasses}
-                />
+                <div className="flex flex-col gap-3">
+                  <Tabs
+                    aria-label="Import source"
+                    selectedKey={mode}
+                    onSelectionChange={(k) => setMode(String(k))}
+                    size="sm"
+                  >
+                    <Tab key="text" title="Paste text" />
+                    <Tab key="url" title="From URL" />
+                  </Tabs>
+                  {mode === "url" ? (
+                    <>
+                      <Input
+                        aria-label="Recipe URL"
+                        placeholder="https://www.example.com/paneer-butter-masala"
+                        value={url}
+                        onValueChange={setUrl}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && url.trim() && !fetching) fetchUrl();
+                        }}
+                        classNames={inputClasses}
+                      />
+                      <p className="text-xs text-default-400">
+                        Fetches the page and reads its ingredient list. You review everything before
+                        anything is added — nothing else on the page is imported.
+                      </p>
+                    </>
+                  ) : (
+                    <Textarea
+                      aria-label="Recipe text"
+                      minRows={10}
+                      placeholder={"2 cups maida\n1/2 tsp haldi\n2-3 hari mirch, chopped\nsalt to taste"}
+                      value={text}
+                      onValueChange={setText}
+                      classNames={inputClasses}
+                    />
+                  )}
+                </div>
               ) : (
                 <div className="flex flex-col gap-3">
+                  {source && (
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="text-default-600 font-medium">
+                        {source.title || "Recipe"}
+                      </span>
+                      {source.servings && (
+                        <span className="text-default-500">serves {source.servings}</span>
+                      )}
+                      <Chip size="sm" variant="flat" color={VIA_META[source.via]?.color ?? "default"}>
+                        {VIA_META[source.via]?.label ?? source.via}
+                      </Chip>
+                      {source.via === "llm" && (
+                        <span className="text-xs text-default-400 basis-full">
+                          This page had no recipe data, so the AI picked which lines looked like
+                          ingredients — check the list before adding.
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {llmInfo?.code === "rate_limited" ? (
                     <div className="flex flex-wrap items-center gap-3">
                       <p className="text-sm text-warning">
@@ -170,7 +270,7 @@ export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport 
                         color="warning"
                         isDisabled={cooldown > 0 || parsing}
                         isLoading={parsing}
-                        onPress={parse}
+                        onPress={() => parse()}
                       >
                         Retry AI rescue
                       </Button>
@@ -264,9 +364,25 @@ export default function ImportIngredientsModal({ isOpen, onOpenChange, onImport 
               {items === null ? (
                 <>
                   <Button variant="light" onPress={close}>Cancel</Button>
-                  <Button color="primary" onPress={parse} isLoading={parsing} isDisabled={!text.trim()}>
-                    Parse
-                  </Button>
+                  {mode === "url" ? (
+                    <Button
+                      color="primary"
+                      onPress={fetchUrl}
+                      isLoading={fetching || parsing}
+                      isDisabled={!url.trim()}
+                    >
+                      Fetch recipe
+                    </Button>
+                  ) : (
+                    <Button
+                      color="primary"
+                      onPress={() => parse()}
+                      isLoading={parsing}
+                      isDisabled={!text.trim()}
+                    >
+                      Parse
+                    </Button>
+                  )}
                 </>
               ) : (
                 <>

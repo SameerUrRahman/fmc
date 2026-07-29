@@ -233,11 +233,41 @@ observed variance in `PriceSnapshot`, and surface a short "needs attention" list
 Show source + age per line in the recipe workspace, rolled up per recipe
 ("82% of this cost is backed by feed data from today").
 
-### 9. Recipe import from URL — `S/M`
-Most recipe sites emit `schema.org/Recipe` JSON-LD, so this is one fetch + a
-JSON-LD parse feeding `recipeIngredient[]` into the existing parse pipeline, with
-LLM-on-page-text as fallback. Best demo-per-hour on the list, but it adds an input
-channel rather than a capability — do it when a fresh demo beat is wanted.
+### ~~9. Recipe import from URL~~ — done
+`POST /api/recipes/import-url` + a **From URL** tab on the import modal.
+Extraction is pure and lives in [libs/recipeUrl.js](libs/recipeUrl.js)
+(18 test cases, no network); the route owns fetching only.
+
+- **It returns text lines, not costed ingredients.** They go to
+  `/api/recipes/parse`, the same endpoint pasted text uses, so a URL is an input
+  channel and not a second parser. The fetched lines land in the textarea first,
+  so a bad extraction is visible and editable rather than silently becoming a draft.
+- **A ladder, and the UI says which rung fired:** `json-ld` → `microdata` →
+  `heuristic` (`<li>` under an *Ingredients* heading) → `llm`. Measured on six
+  real sites, **four hit JSON-LD and spent no LLM call at all**; one 403'd a
+  scripted client and one served its homepage instead of the recipe. Anti-bot
+  pages, not parsing, are the failure mode — both cases end in "paste the
+  ingredient list instead" rather than a wrong import.
+- **The LLM rung selects rather than extracts.** It sees only the lines carrying
+  a quantity or unit word and answers *which of these are ingredients*; those raw
+  lines then go through the regex parser as usual. Feeding it whole article text
+  would cost thousands of tokens against a 100k/day budget, and item 5 established
+  that output dominates.
+- **Title and yield are adopted only if untouched** — a recipe still named
+  "New Recipe" at 1 serving takes the page's name and `recipeYield`. An import
+  adds ingredients; it doesn't get to rename a recipe you named.
+
+**The part that needed the actual care was the fetch, not the parse.** This adds
+an unauthenticated outbound fetch primitive to a public no-auth instance, so:
+scheme/credential/private-host checks up front, the hostname re-resolved and
+*every* resolved address re-checked (loopback, RFC1918, CGNAT, 169.254.169.254),
+redirects followed **manually** so each hop is re-validated — `redirect: "follow"`
+would land on a 302 into the metadata service with no way to see it happened —
+and 1.5 MB / 10 s / HTML-only caps. The endpoint returns extracted page text,
+never a raw body. Those rules are exported pure and tested, so they're checked
+rather than asserted. Remaining gap, stated rather than hidden: DNS rebinding
+between the lookup and `fetch()`'s own resolution is still possible; closing it
+needs a pinned-IP agent, which is more machinery than a demo importer warrants.
 
 ### 10. Packaged-goods scrape, reworked — `S` *(wanted list comes from item 6)*
 Keep `scrape_bigbasket.mjs` **off** GitHub Actions. Rework as
@@ -257,7 +287,8 @@ because a transcript is just text entering the path built for pasted text.
 Needs: a `MediaRecorder` capture control in `ImportIngredientsModal.jsx`, a route
 forwarding the blob to Groq's `audio/transcriptions` endpoint, and the per-call
 model override from item 5. Strong demo per hour spent; parked because it adds an
-input channel rather than deepening the data pipeline, same reasoning as item 9.
+input channel rather than deepening the data pipeline — the same reason item 9
+sat unbuilt until a fresh demo beat was wanted.
 
 ## Explicitly not doing
 

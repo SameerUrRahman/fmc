@@ -73,12 +73,17 @@ export default function RecipeWorkspace({ initialRecipe, knownIngredients, histo
   const [dirty, setDirty] = useState(false);
   const importModal = useDisclosure();
 
-  const importLines = (newLines) => {
+  const importLines = (newLines, source = null) => {
     setDirty(true);
     setLines((prev) => [
       ...prev.filter((l) => l.ingredientName.trim() !== ""),
       ...newLines.map((l) => ({ ...l, key: crypto.randomUUID() })),
     ]);
+    // A URL import knows the recipe's own name and yield. Only adopt them when
+    // the user hasn't set anything themselves — an import adds ingredients, it
+    // doesn't get to rename a recipe or overwrite a considered serving count.
+    if (source?.title && name.trim() === "New Recipe") setName(source.title);
+    if (source?.servings && servings === "1") setServings(String(source.servings));
     router.refresh(); // pick up any price-book entries the import created
   };
 
@@ -320,7 +325,7 @@ export default function RecipeWorkspace({ initialRecipe, knownIngredients, histo
                 + Add ingredient
               </Button>
               <Button variant="flat" onPress={importModal.onOpen}>
-                ⇣ Import from text
+                ⇣ Import from text or URL
               </Button>
             </div>
             <ImportIngredientsModal

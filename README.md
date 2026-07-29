@@ -16,6 +16,7 @@ Built with Next.js (App Router), MongoDB Atlas, and HeroUI.
 - **Price sync** — scripts to pull daily Telangana mandi prices from data.gov.in and (best-effort) BigBasket prices for packaged goods, plus a GitHub Actions cron to run the gov sync daily.
 - **Trends & scenarios** — a sparkline per price-book row, a chart of what each recipe would have cost on every day there are prices for, a ranked breakdown of which ingredients drive the cost, and a what-if slider bounded by each ingredient's *observed* price range ("every price at its peak, this recipe costs ₹X"). Plus reverse pricing: name a selling price, see the margin and ingredient budget it implies.
 - **Log what you paid** — record a purchase as the receipt reads ("₹110 for 2 kg"), not as a unit price. It's the only source here that's ground truth rather than a market proxy, so it outranks every feed, and it doubles as feed validation: the form shows the gap against the price book as you type.
+- **Import from a URL or pasted text** — paste a recipe link and the ingredient list is read off the page (most recipe sites publish `schema.org/Recipe`), or paste the list yourself from a blog, a YouTube description or WhatsApp. Either way the same parser handles it, and you review the draft before anything is added.
 - **Price lookup for unknown ingredients** — an explicit "Look up" on any unpriced row tries the live data.gov.in feed, then a cached AI estimate. Anything nothing can price properly lands on a **wanted list** on the Price Book page.
 
 What's planned next and why is in [ROADMAP.md](ROADMAP.md).
@@ -146,6 +147,47 @@ adapter is [libs/llmExtract.js](libs/llmExtract.js).
 The free-tier budget is 30 RPM / 1,000 RPD / 12k TPM / 100k TPD. Token cost
 scales with how much the regex parser *missed*, so a high LLM-line count on an
 ordinary recipe is a parser bug, not an expected cost.
+
+## Importing a recipe from a URL
+
+`POST /api/recipes/import-url` fetches a page and returns **raw ingredient text
+lines**, which the client then sends to `/api/recipes/parse` — the same endpoint
+pasted text goes through. A URL is an input channel, not a second parser, so
+units, Hinglish aliases, LLM rescue and price-book matching behave identically
+however the text arrived. All the extraction lives in
+[libs/recipeUrl.js](libs/recipeUrl.js) and is pure, so it's tested against saved
+HTML with no network.
+
+The ladder, best evidence first — the badge in the importer says which rung fired:
+
+| Rung | What it reads | Cost |
+| --- | --- | --- |
+| `json-ld` | `schema.org/Recipe` in `<script type="application/ld+json">` | one fetch |
+| `microdata` | `itemprop="recipeIngredient"` | one fetch |
+| `heuristic` | `<li>` under a heading matching *Ingredients* | one fetch |
+| `llm` | the model picks which lines are ingredients | one fetch + one LLM call |
+
+Measured on six real sites: four hit `json-ld` and spent **no** LLM call
+(indianhealthyrecipes, bbcgoodfood, cookwithmanali, recipetineats); one returned
+403 to a scripted client and one served its homepage instead of the recipe —
+both surface as "paste the ingredient list instead" rather than a wrong import.
+Anti-bot pages are the real failure mode here, not parsing.
+
+**The LLM rung selects, it doesn't extract.** It's handed only the lines
+carrying a quantity or a unit word, and its answer is *which of those lines are
+ingredients* — those raw lines then go through the regex parser like any pasted
+text. Sending a whole article instead would cost thousands of tokens per import
+against a 100k/day budget, and output tokens dominate.
+
+**This is an unauthenticated outbound fetch on a public instance**, which is the
+part worth getting right. `normalizeRecipeUrl()` rejects non-HTTP schemes,
+embedded credentials and private hosts; the hostname is re-resolved and every
+resolved address re-checked against loopback / RFC1918 / CGNAT / link-local
+(169.254.169.254 included) before the request goes out; redirects are followed
+**manually** so each hop is re-validated, because `redirect: "follow"` would
+happily land on a 302 into the metadata service unseen. Responses are capped at
+1.5 MB, 10 s, and HTML content types. The endpoint returns extracted page *text*
+only, never a raw response body.
 
 ## Pricing an ingredient no feed carries
 
