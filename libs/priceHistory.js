@@ -10,15 +10,10 @@ import { dailySeries, seriesStats } from "./trends";
 // needs while keeping the query small enough to run on every page render.
 export const DEFAULT_WINDOW_DAYS = 90;
 
-/** The IST calendar day for an instant, as "YYYY-MM-DD" — must match scripts/_shared.mjs. */
-export function istDay(date = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-}
+// istDay() moved to libs/istDay.js so pure code and tests can use it without
+// importing the mongoose model above. Re-exported here for existing callers.
+export { istDay } from "./istDay";
+import { istDay } from "./istDay";
 
 /**
  * Daily price series for a set of ingredients, ready to hand to a client

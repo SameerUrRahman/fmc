@@ -27,6 +27,10 @@ const priceSnapshotSchema = new Schema(
     observedOn: { type: String, required: true },
     // the real instant we recorded it, kept for ordering within a day
     observedAt: { type: Date, required: true, default: Date.now },
+    // free text, only ever set on `purchase` rows: where it was bought, pack
+    // size, whatever explains the number six months from now. A feed price is
+    // self-describing; a price I paid is not.
+    note: { type: String, default: "", trim: true },
   },
   { timestamps: true }
 );

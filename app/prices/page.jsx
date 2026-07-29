@@ -1,5 +1,6 @@
 import connectMongoDB from "@/libs/mongodb";
 import KnownIngredients from "@/models/knownIngredient";
+import WantedIngredient from "@/models/WantedIngredient";
 import PriceBook from "@/components/PriceBook";
 import { getHistoryFor } from "@/libs/priceHistory";
 
@@ -14,5 +15,12 @@ export default async function PricesPage() {
   const history = await getHistoryFor(
     ingredients.map((i) => ({ ingredientName: i.ingredientName, priceUnit: i.priceUnit }))
   );
-  return <PriceBook ingredients={ingredients} history={history} />;
+  // the wanted list, most-asked first — capped because it's a prompt to act,
+  // not a report; a wall of 200 chips is the same as no list at all
+  const wantedDocs = await WantedIngredient.find({ status: "pending" })
+    .sort({ timesRequested: -1, lastAttemptAt: -1 })
+    .limit(24)
+    .lean();
+  const wanted = JSON.parse(JSON.stringify(wantedDocs));
+  return <PriceBook ingredients={ingredients} history={history} wanted={wanted} />;
 }

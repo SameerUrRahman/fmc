@@ -50,17 +50,48 @@ wholesale→retail spread, and recomputes what my recipes cost over time"* — n
 
 ## Next
 
-### 1. DoCA retail price sync — `S`
-The Department of Consumer Affairs publishes daily **retail** prices for essential
-commodities on data.gov.in, under the same free API key the mandi sync already
-uses. Agmarknet gives wholesale, DoCA gives retail.
+### 1. DoCA retail price sync — **blocked: the premise is false**
+Investigated 2026-07-29. **There is no live DoCA retail feed on data.gov.in.**
+Checked against the API with the real key:
 
-Why this over scraping BigBasket: it's the same pipeline shape, no bot protection,
-no ToS question on a public repo, and it won't silently break. More importantly,
-having both feeds for the same commodity on the same day makes the mandi→retail
-spread a **measured, per-commodity, time-varying quantity** instead of the guessed
-20–40% markup currently noted in the README. The snapshot schema was designed for
-this — source is part of the dedupe key, so the two series coexist.
+- Org "Department of Consumer Affairs" has exactly 20 datasets, all frozen — the
+  titles literally end *"upto April - 2015"*.
+- A full-catalog title sweep found only two resources updated in 2026, and both
+  are Agmarknet **wholesale**.
+- `fcainfoweb.nic.in/PMSAPI/api/GetDailyPrices` exists but returns
+  `401 "Token Missing"` — it's the internal app API, not a public one.
+- The DoCA web report portal (`report_menu_web.aspx`) carries a
+  `ctl00$MainContent$Captcha` field. Not going there: a public repo whose cron
+  solves a government CAPTCHA is not a portfolio asset.
+
+**The substitute that does work.** Resource `35985678` — *"Variety-wise Daily
+Market Prices Data of Commodity"* — is the Agmarknet **historical archive**:
+80.8M rows, back to 2004, current to within a day or two, same free key. Its
+`Market` column mixes APMC wholesale yards with **Rythu Bazars**, Telangana's
+government retail farmer markets, so both tiers appear for the same commodity on
+the same day from one API. Measured over 20–22 July 2026:
+
+| Day | Commodity | Rythu Bazar | APMC | Spread |
+| --- | --- | --- | --- | --- |
+| 20/07 | Onion | ₹26.80 | ₹20.62 | +30% |
+| 21/07 | Onion | ₹27.00 | ₹21.78 | +24% |
+| 20/07 | Tomato | ₹21.25 | ₹13.82 | +54% |
+| 22/07 | Tomato | ₹20.50 | ₹12.82 | +60% |
+
+Caveat, not to be oversold: a Rythu Bazar is farmer-direct, so it's a *floor* on
+retail, not a supermarket price. Item 7's purchase log measured the real
+supermarket gap at +57% (onion) and +135% (tomato) — so there are arguably three
+tiers here, not two.
+
+The same archive would also **backfill real multi-day history today** instead of
+waiting for the cron to accumulate, which is independently the cheapest way to
+make the already-built trend charts render something.
+
+Open decision — none of these is started:
+**(a)** ship the Rythu Bazar tier as `source: "rythu-bazar"`;
+**(b)** backfill history from the archive;
+**(c)** both, backfill first;
+**(d)** drop the second feed, keep the purchase log as the retail basis, go to item 2.
 
 ### 2. Costing correctness pass — `M`
 One change across `libs/units.js`, the models, and `RecipeWorkspace`:
@@ -72,9 +103,9 @@ One change across `libs/units.js`, the models, and `RecipeWorkspace`:
   (A denormalized price is correct for an *order* and a bug for a live *cost model* —
   knowing which you're building is the whole point.)
 - **Source precedence:** `purchase > doca-retail > mandi × spread > manual > llm-estimate`.
-  (`purchase` comes from item 7 below — until that ships the chain starts at
-  `doca-retail`. Build the resolver so tiers can be absent rather than assuming
-  all five exist.)
+  (`purchase` and `llm-estimate` both exist now — items 7 and 6 shipped. `doca-retail`
+  never will; see item 1. Build the resolver so tiers can be absent rather than
+  assuming all five exist — `sourceRank()` in `libs/trends.js` already works this way.)
 - **Yield/waste factor** per ingredient — a peeled onion isn't 100% usable.
 - **Unit tests for `libs/units.js`** — it's pure, deterministic, and the trickiest
   code in the repo (density crossover, the count↔mass refusal, the `needsDensity`
@@ -95,7 +126,7 @@ table (1 onion ≈ 110 g) beside the existing density table so "200 g onion" and
 "2 piece onion" can merge — which also retires the visible count↔mass "can't cost"
 failure.
 
-### 4. Mandi-vs-retail spread chart — `S` *(needs item 1)*
+### 4. Mandi-vs-retail spread chart — `S` *(still needs a second feed — see item 1)*
 The one piece of the trend work that couldn't be built: it needs two feeds for
 the same commodity on the same day, and there is currently only one. Everything
 else it depends on is in place — `dailySeries()` in
@@ -145,28 +176,54 @@ same paste needs **zero** LLM lines. Budget for the LLM as a rescue path for
 genuinely odd input, and treat a high LLM-line count on ordinary recipes as a
 parser bug rather than an expected cost.
 
-### 6. Unknown-ingredient handling — `S` *(unblocked — item 5 shipped)*
-On a price-book miss: try a live data.gov.in lookup (JSON API, fast, no bot
-protection), fall back to an LLM price estimate via the existing
-`libs/llmExtract.js` adapter (`source: "llm-estimate"`, flagged in the UI, bottom
-of the precedence chain), and log the miss to a wanted list the manual scrape
-works through first. **No headless browser in the request path** — Vercel's
-egress is datacenter IPs, so a live scrape gets blocked, and the failure would be
-synchronous and user-facing.
+### ~~6. Unknown-ingredient handling~~ — done
+`POST /api/prices/lookup`, reachable from a **Look up** button that appears only
+on unpriced price-book rows. Explicit action only — never wired to autocomplete.
 
-Two hard constraints: trigger on an **explicit** "look up price" action, never on
-autocomplete keystrokes (at 30 RPM, two ingredient names of typing trips the
-limit), and **cache every estimate as a snapshot** so an unknown ingredient costs
-exactly one call ever — which is also what keeps the open public instance safe
-from a stranger burning the daily quota.
+- **Tier 1, the live feed** ([libs/priceLookup.js](libs/priceLookup.js)). Matching
+  reuses `matchKnownIngredient()` against synthetic one-field docs rather than a
+  second commodity map, so it inherits the Hinglish alias table for free —
+  verified live: "kanda" → `Onion` across 13 Telangana markets, ₹25.91/kg.
+  Threshold raised to **0.72** (vs the price book's 0.6) because the two mistakes
+  aren't symmetric: a loose price-book match is visible next to the name it came
+  from, a loose commodity match writes cardamom prices onto coriander under a
+  `data.gov.in` label and is never questioned again.
+- **Tier 2/3, AI estimate, cached forever.** Keyed on name alone, not day — the
+  point of caching a guess is that asking tomorrow costs a call and returns the
+  same guess. Plus `LLM_ESTIMATE_DAILY_CAP` (25) on *new* ingredients per day,
+  which is what bounds quota burn on the no-auth public instance.
+- **Wanted list** (`WantedIngredient`), surfaced on the Price Book page, ordered
+  by how often each name has been asked for. Only a feed hit or a logged purchase
+  resolves an entry.
 
-### 7. Log what I paid — `S`
-The only source that's ground truth for *my* costs rather than a market proxy.
-Record the price when something is actually bought; writes to `PriceSnapshot` with
-`source: "purchase"` and sits at the top of the precedence chain. No new
-infrastructure — it's a form. Doubles as validation for the feeds ("retail said
-₹48/kg, I paid ₹55"), which is a real finding about data quality rather than a
-feature. Also the only practical answer for Tier-B goods the feeds never cover.
+**The finding that changed the design:** the estimate prompt tells the model to
+reply `{"price":0}` for anything it can't price, and it doesn't. Asked for
+"qwertyx nonfood widget" it returned ₹299/piece ("assumed novelty item"); asked
+for "zblorp gadget thing", ₹299/piece at **medium** confidence. So neither the
+refusal path nor the self-reported confidence separates a real ingredient from a
+string of noise — *the model will price anything*. The first cut gated on
+`confidence === "low"` and would have been worthless. An AI estimate now unblocks
+the recipe but never clears the wanted list; only a real source does.
+
+### ~~7. Log what I paid~~ — done
+`POST /api/purchases` + a modal on the Price Book. Logic in
+[libs/purchases.js](libs/purchases.js) (pure, 9 test cases).
+
+- **Entered as the receipt reads** — "₹110" and "2 kg", not a unit price.
+  Requiring the user to divide first is how a form stops getting used.
+- **4-decimal rounding, not 2.** ₹60 for a 500 g pack is ₹0.12/g; 2 decimals
+  quantizes that into a real error in every gram-priced recipe line.
+- **Today updates the price book; backdated goes to history only.** Verified
+  both ways: a same-day onion purchase moved the row to `source: purchase`, while
+  a receipt dated four days back left the current price on `data.gov.in ₹17` and
+  still showed up in the sparkline.
+- **Resolves wanted-list entries**, which is what makes the "log what you paid to
+  clear this" prompt in the UI true rather than decorative.
+
+**It immediately falsified the README.** Hyderabad retail vs the same day's mandi
+feed: onion ₹35 → ₹55/kg (**+57%**), tomato ₹17 → ₹40/kg (**+135%**). The
+long-asserted "retail runs ~20–40% higher" was wrong in general and badly wrong
+for tomato. That is the feed-validation payoff working on day one.
 
 ### 8. Volatility-aware staleness + provenance — `S`
 `staleness()` in `components/PriceBook.jsx` applies one flat 7d/30d threshold to
@@ -246,6 +303,13 @@ input channel rather than deepening the data pipeline, same reasoning as item 9.
   Both copies carry a "change both together" comment, but nothing enforces it — a
   divergence here fails silently at write time. Fix by extracting the schema to a
   `.mjs` both sides can import.
+
+  Item 7 hit this immediately: adding the `note` field meant editing both copies
+  by hand, and forgetting the second one would have silently dropped purchase
+  notes written by the scripts. `istDay()` had the same shape and *was* fixed —
+  it now lives alone in [libs/istDay.js](libs/istDay.js) so pure code, tests, and
+  the model-touching read path all share one definition (only the `.mjs` copy
+  remains). The schema deserves the same treatment.
 - `.agent/` was committed in `5897894` — ~7,700 lines of agent skill docs now sit
   in a public portfolio repo an interviewer might browse. Consider `.gitignore`.
 - "to taste" ingredients parse to quantity 0 and silently cost ₹0. Fine for salt,

@@ -15,6 +15,8 @@ Built with Next.js (App Router), MongoDB Atlas, and HeroUI.
 - **Price book** — one place for current ingredient prices, with source and freshness (`3d ago`) per entry. Recipe autocomplete autofills from it.
 - **Price sync** — scripts to pull daily Telangana mandi prices from data.gov.in and (best-effort) BigBasket prices for packaged goods, plus a GitHub Actions cron to run the gov sync daily.
 - **Trends & scenarios** — a sparkline per price-book row, a chart of what each recipe would have cost on every day there are prices for, a ranked breakdown of which ingredients drive the cost, and a what-if slider bounded by each ingredient's *observed* price range ("every price at its peak, this recipe costs ₹X"). Plus reverse pricing: name a selling price, see the margin and ingredient budget it implies.
+- **Log what you paid** — record a purchase as the receipt reads ("₹110 for 2 kg"), not as a unit price. It's the only source here that's ground truth rather than a market proxy, so it outranks every feed, and it doubles as feed validation: the form shows the gap against the price book as you type.
+- **Price lookup for unknown ingredients** — an explicit "Look up" on any unpriced row tries the live data.gov.in feed, then a cached AI estimate. Anything nothing can price properly lands on a **wanted list** on the Price Book page.
 
 What's planned next and why is in [ROADMAP.md](ROADMAP.md).
 
@@ -33,6 +35,8 @@ Copy `.env.example` to `.env` and fill it in (never commit `.env`):
 | `GROQ_API_KEY` *or* `GEMINI_API_KEY` | optional | LLM rescue for ingredient lines the regex parser can't handle. Without a key the importer still works — unparsed lines just stay flagged for manual entry. |
 | `LLM_PROVIDER` / `LLM_MODEL` | optional | Force a provider, or override the model for every task. |
 | `LLM_MODEL_EXTRACT` / `LLM_MODEL_ESTIMATE` | optional | Override the model for one task only. Takes priority over `LLM_MODEL`. |
+| `LLM_ESTIMATE_DAILY_CAP` | optional | How many *new* ingredients may get a fresh AI price estimate per IST day (default 25). Cached estimates don't count. The live instance has no auth, so this is what bounds quota burn. |
+| `PRICE_FEED_STATE` | optional | Which state the live price lookup queries (default `Telangana`). |
 
 Then:
 
@@ -47,7 +51,7 @@ npm run seed           # seed the price book with ~40 Indian staples
 | --- | --- |
 | `npm test` | Runs `node:test` over `tests/*.test.mjs`. No test-framework dependency and no build step — Node ≥22.7 detects the module syntax in the ESM-in-`.js` libs. No database needed; the covered code is pure. |
 | `npm run seed` | Seeds/updates the price book with common staples; migrates legacy entries. |
-| `npm run prices:gov` | Pulls daily mandi prices (data.gov.in, Agmarknet) for Telangana → price book. Needs `DATA_GOV_API_KEY` (free from [data.gov.in](https://data.gov.in)). Mandi = wholesale; retail runs ~20–40% higher. Coverage varies day to day — markets don't report every commodity, so a typical run updates 8–12 of the ~23 mapped names, mostly fresh produce. |
+| `npm run prices:gov` | Pulls daily mandi prices (data.gov.in, Agmarknet) for Telangana → price book. Needs `DATA_GOV_API_KEY` (free from [data.gov.in](https://data.gov.in)). Mandi = wholesale; retail runs higher, and by more than the ~20–40% this file used to assert — spot-checking Hyderabad retail against the same day's feed gave onion +57% (₹35 → ₹55/kg) and tomato +135% (₹17 → ₹40/kg). Treat the mandi price as a floor, not a retail estimate; the purchase log is what makes the real gap measurable per commodity. Coverage varies day to day — markets don't report every commodity, so a typical run updates 8–12 of the ~23 mapped names, mostly fresh produce. |
 | `npm run prices:bigbasket` | Best-effort Playwright scrape of packaged-goods prices. Install first: `npm i -D playwright && npx playwright install chromium`. Personal-scale use only. |
 | `npm run prices:backfill` | One-time: seeds price history from the current price book, one snapshot per entry dated by its own `fetchedAt`. Safe to re-run. |
 | `npm run prices:history` | Prints the observation log — summary, or `npm run prices:history -- onion` for one ingredient's series with day-over-day change. |
@@ -142,6 +146,58 @@ adapter is [libs/llmExtract.js](libs/llmExtract.js).
 The free-tier budget is 30 RPM / 1,000 RPD / 12k TPM / 100k TPD. Token cost
 scales with how much the regex parser *missed*, so a high LLM-line count on an
 ordinary recipe is a parser bug, not an expected cost.
+
+## Pricing an ingredient no feed carries
+
+Two tiers of last resort, both reachable only from an **explicit** user action —
+never from an autocomplete or a keystroke handler, because at 30 requests/minute
+two ingredient names of typing would trip the free-tier limit.
+
+`POST /api/prices/lookup` tries, in order:
+
+1. **The live data.gov.in feed** ([libs/priceLookup.js](libs/priceLookup.js)).
+   Matching reuses the price-book matcher rather than a second commodity map, so
+   it inherits the Hinglish alias table — "kanda" resolves to `Onion` and prices
+   off 13 Telangana markets. The match threshold is stricter than the price
+   book's (0.72 vs 0.6): a loose price-book match is visible next to the name it
+   came from, but a loose *commodity* match silently writes cardamom prices onto
+   coriander under an authoritative `data.gov.in` label.
+2. **An AI estimate**, cached forever. The cache is keyed on the ingredient name
+   alone, not the day — asking again tomorrow would cost a call and return the
+   same guess. One call per ingredient, ever, plus a daily cap on *new*
+   ingredients (`LLM_ESTIMATE_DAILY_CAP`, default 25) so a stranger on the open
+   instance can't burn the quota.
+
+> **An AI estimate never clears the wanted list.** The prompt tells the model to
+> return `{"price":0}` for anything it can't price. It doesn't: asked for
+> "qwertyx nonfood widget" it returned ₹299/piece ("assumed novelty item"), and
+> for "zblorp gadget thing" ₹299/piece at *medium* confidence. Neither the
+> refusal path nor the self-reported confidence separates a real ingredient from
+> a string of noise — the model will price anything. So an estimate unblocks the
+> recipe and is flagged `llm-estimate` at the bottom of the precedence chain, but
+> the ingredient stays queued until a real source answers.
+
+The **wanted list** (`WantedIngredient`) is that queue, shown on the Price Book
+page and ordered by how often each name has been asked for. Only a feed hit or a
+logged purchase resolves an entry, which is what makes the packaged-goods scrape
+worth running against a list rather than the whole book.
+
+## Logging what you paid
+
+Every other price here is a market proxy. A receipt isn't, so `purchase` sits at
+the top of the source precedence. Logic is in
+[libs/purchases.js](libs/purchases.js) (pure, tested).
+
+- **Entered as the receipt reads.** "₹110" and "2 kg" are two different lines on
+  a bill; asking someone to divide before they can log a purchase is how a
+  feature stops getting used. Unit price is derived and shown live.
+- **Rounded to 4 decimals, not 2.** Per-gram prices are legitimate here — ₹60 for
+  a 500 g pack is ₹0.12/g, and 2 decimals would quantize that into a real error
+  in every recipe line priced in grams.
+- **Today updates the price book; a backdated receipt doesn't.** A purchase from
+  today is the best current answer to "what does this cost". One from three weeks
+  ago belongs in history so the charts can see it — moving the current price
+  backwards to match it would look exactly like the daily sync had broken.
 
 ## How costing works
 

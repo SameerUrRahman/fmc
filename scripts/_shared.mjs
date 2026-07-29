@@ -69,6 +69,7 @@ const priceSnapshotSchema = new mongoose.Schema(
     source: { type: String, required: true, default: "manual" },
     observedOn: { type: String, required: true },
     observedAt: { type: Date, required: true, default: Date.now },
+    note: { type: String, default: "", trim: true },
   },
   { timestamps: true }
 );

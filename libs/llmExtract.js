@@ -294,3 +294,83 @@ export async function extractIngredientsLLM(lines, options = {}) {
   }
   return out;
 }
+
+// Units an estimate may be denominated in. Deliberately narrower than
+// PRICE_UNITS: asking a model for "₹ per mL of vanilla essence" invites a
+// decimal-place error that then multiplies through every recipe line.
+const ESTIMATE_UNITS = ["kg", "L", "piece"];
+
+function buildEstimatePrompt(ingredientName) {
+  return `You estimate typical Indian retail grocery prices, in Indian Rupees.
+
+Estimate the current retail price of: "${ingredientName}"
+
+Reply with ONLY a JSON object:
+{"price":<number>,"unit":"<one of: ${ESTIMATE_UNITS.join(", ")}>","confidence":"<high|medium|low>","basis":"<under 12 words on what this is priced as>"}
+
+Rules:
+- Price a typical urban Indian supermarket, mid-range brand, 2020s prices.
+- Choose the unit that item is normally sold by: staples and produce per kg,
+  liquids per L, countable items (eggs, coconuts, bread loaves) per piece.
+- price must be a plain positive number, no ranges, no currency symbol.
+- If "${ingredientName}" is not a food ingredient you can price, reply {"price":0}.`;
+}
+
+/**
+ * Ask the LLM for a ballpark price. The bottom of SOURCE_PRECEDENCE — used only
+ * when the government feed has no matching commodity.
+ *
+ * Runs on the `estimate` task, so it resolves to a small fast model
+ * (llama-3.1-8b-instant on groq) via a rate-limit bucket independent of the
+ * importer's. See modelFor().
+ *
+ * Callers MUST cache the result — see app/api/prices/lookup/route.js. An
+ * estimate that gets re-fetched is a quota leak, and the estimate does not get
+ * better on the second ask.
+ *
+ * @param {string} ingredientName
+ * @param {{model?: string}} [options]
+ * @returns {Promise<{price:number, priceUnit:string, confidence:string, basis:string}|null>}
+ *          null when the model declined to price it
+ * @throws {LlmError}
+ */
+export async function estimatePriceLLM(ingredientName, options = {}) {
+  const which = provider();
+  if (!which) throw new LlmError("no LLM provider configured", { code: "no_provider" });
+  const name = String(ingredientName ?? "").trim();
+  if (!name) return null;
+
+  const model = modelFor("estimate", which, options.model);
+  const prompt = buildEstimatePrompt(name);
+  const rawText =
+    which === "groq" ? await callGroq(prompt, model) : await callGemini(prompt, model);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    const m = rawText.match(/\{[\s\S]*\}/);
+    if (!m) {
+      throw new LlmError("LLM returned non-JSON output", {
+        code: "bad_response",
+        provider: which,
+        model,
+      });
+    }
+    parsed = JSON.parse(m[0]);
+  }
+
+  const price = Number(parsed?.price);
+  // 0 is the documented "I can't price this" reply, not a free ingredient.
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  return {
+    price: Math.round(price * 100) / 100,
+    priceUnit: ESTIMATE_UNITS.includes(parsed?.unit) ? parsed.unit : "kg",
+    confidence: ["high", "medium", "low"].includes(parsed?.confidence)
+      ? parsed.confidence
+      : "low",
+    basis: String(parsed?.basis ?? "").trim().slice(0, 120),
+    model,
+  };
+}
