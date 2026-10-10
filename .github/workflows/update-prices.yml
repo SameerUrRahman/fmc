@@ -18,7 +18,8 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
-      - run: node scripts/fetch_gov_prices.mjs
+      # The flag silences a harmless warning from importing libs/*.js as ESM.
+      - run: node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/fetch_gov_prices.mjs
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
